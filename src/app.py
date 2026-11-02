@@ -74,6 +74,8 @@ class TonyPlotApp(tk.Tk):
         self.log_single_edits: dict[int, dict] = {}
         self.figure_edits: dict[str, dict] = {"str": {}, "log": {}}
         self.editors = {}
+        self.undo_history = {"str": [], "log": []}
+        self.undo_buttons = {}
         self.busy = False
         self.gc_was_enabled = False
         self.render_results = queue.Queue()
@@ -85,6 +87,7 @@ class TonyPlotApp(tk.Tk):
         }
         self.extra_field_codes: list[int] = []
         self.field_settings: dict[str, dict[str, str]] = {}
+        self.panel_labels = {}
         self.control_hints = []
         self._build_ui()
         self._refresh_language()
@@ -92,6 +95,44 @@ class TonyPlotApp(tk.Tk):
         self.tooltips = TooltipManager(self)
         self.tooltips.set_theme(BORDER, self.preferences["font_size"])
         self._register_tooltips()
+        self.bind("<Control-z>", self._undo_shortcut)
+
+    def checkpoint_edit(self, kind):
+        snapshot = {"visual": copy.deepcopy(self.figure_edits[kind])}
+        if kind == "str":
+            snapshot.update(panel_labels=copy.deepcopy(self.panel_labels),
+                            field_settings=copy.deepcopy(self.field_settings))
+        else:
+            snapshot["single"] = copy.deepcopy(self.log_single_edits)
+        history = self.undo_history[kind]
+        history.append(snapshot)
+        del history[:-50]
+        button = self.undo_buttons.get(kind)
+        if button is not None and button.winfo_exists():
+            button.configure(state="normal")
+
+    def undo_edit(self, kind):
+        if self.busy or not self.undo_history[kind]:
+            return
+        snapshot = self.undo_history[kind].pop()
+        self.figure_edits[kind] = snapshot["visual"]
+        if kind == "str":
+            self.panel_labels = snapshot["panel_labels"]
+            self.field_settings = snapshot["field_settings"]
+        else:
+            self.log_single_edits = snapshot["single"]
+        button = self.undo_buttons.get(kind)
+        if button is not None and button.winfo_exists():
+            button.configure(state="normal" if self.undo_history[kind] else "disabled")
+        self._start_render(kind)
+
+    def _undo_shortcut(self, _event):
+        focus = self.focus_get()
+        if self.grab_current() is not None or (focus is not None and focus.winfo_class() in
+                ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox")):
+            return
+        self.undo_edit(self._active_kind())
+        return "break"
 
     def tr(self, value):
         return translate(str(value), self.language)
@@ -426,6 +467,8 @@ class TonyPlotApp(tk.Tk):
         self._entry(view, "镜像轴 x (µm)", "mirror_x", 9.5)
         self._check(view, "显示结构与结线", "overlay", True)
         self._check(view, "显示坐标网格", "grid", False)
+        self._check(view, "显示物理量标题", "show_quantity_title", False)
+        ttk.Button(view, text="子图轴标签…", command=self.open_panel_labels).pack(anchor="w", pady=4)
         self._entry(view, "x 最小值", "x0", 0)
         self._entry(view, "x 最大值", "x1", 9.5)
         self._entry(view, "深度最小值", "y0", 0)
@@ -555,7 +598,7 @@ class TonyPlotApp(tk.Tk):
         label = getattr(widget, "_i18n_source", widget.cget("text"))
         hints = {
             "画图 / 更新预览": "在后台读取文件并更新预览。修改参数后再次点击生效。",
-            "导出图片": "将当前预览导出为 PNG、PDF 或 SVG；图片默认保存到 imgs 文件夹。",
+            "导出图片": "将当前预览导出为 PNG、PDF 或 SVG；默认打开当前页签选择的数据目录。",
             "设置": "切换主题、界面字号、默认导出 DPI 和窗口尺寸。",
             "选择目录": "打开文件夹选择器。选定后自动加载目录中的数据文件。",
             "加载目录": "读取输入框中的目录，更新文件和可选字段列表。",
@@ -996,6 +1039,7 @@ class TonyPlotApp(tk.Tk):
             except ValueError as exc:
                 messagebox.showerror(self.tr("参数无效"), self.tr(str(exc)), parent=dialog)
                 return
+            self.checkpoint_edit("str")
             self.field_settings[field] = data
             dialog.destroy()
 
@@ -1031,6 +1075,77 @@ class TonyPlotApp(tk.Tk):
         self.files[index], self.files[dest] = self.files[dest], self.files[index]
         self.refresh_files(); self.file_list.selection_set(dest)
 
+    def open_panel_labels(self):
+        try:
+            options = self.settings()
+            panels, columns = renderer.panel_layout(options)
+            if columns < 1:
+                raise ValueError("列数必须至少为 1")
+        except ValueError as exc:
+            messagebox.showerror(self.tr("参数无效"), self.tr(str(exc)), parent=self)
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title(self.tr("子图轴标签"))
+        dialog.transient(self)
+        dialog.geometry("680x460")
+        dialog.grab_set()
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=self.tr("勾选表示显示轴名称；不影响刻度数字。隐藏后自动收紧行列间距。"),
+                  wraplength=640).pack(anchor="w", pady=(0, 8))
+        presets = ttk.Frame(body)
+        presets.pack(fill="x", pady=(0, 8))
+        area = ttk.Frame(body)
+        area.pack(fill="both", expand=True)
+        canvas = tk.Canvas(area, highlightthickness=0, bg=SURFACE)
+        scroll = ttk.Scrollbar(area, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        rows = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=rows, anchor="nw")
+        rows.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        dialog.bind("<MouseWheel>", lambda event: canvas.yview_scroll(-int(event.delta / 120), "units"))
+        choices = []
+        for index, (file_index, quantity) in enumerate(panels):
+            path = options["files"][file_index]
+            key = (str(path), quantity)
+            saved = self.panel_labels.get(key, {})
+            x = tk.BooleanVar(value=saved.get("x", True))
+            y = tk.BooleanVar(value=saved.get("y", True))
+            row = ttk.Frame(rows, padding=(4, 5))
+            row.pack(fill="x")
+            label = f"[{index // columns + 1}, {index % columns + 1}] {path.name}\n{renderer.quantity_label(quantity)}"
+            ttk.Label(row, text=label, wraplength=450).pack(side="left", fill="x", expand=True)
+            ttk.Checkbutton(row, text="X label", variable=x).pack(side="left", padx=8)
+            ttk.Checkbutton(row, text="Y label", variable=y).pack(side="left", padx=8)
+            choices.append((key, x, y))
+
+        def preset(mode):
+            for index, (_key, x, y) in enumerate(choices):
+                x.set(mode == "all" or (mode == "outer" and index + columns >= len(panels)))
+                y.set(mode == "all" or (mode == "outer" and index % columns == 0))
+
+        for text, mode in (("全部显示", "all"), ("仅显示外侧", "outer"), ("全部隐藏", "none")):
+            ttk.Button(presets, text=self.tr(text), command=lambda mode=mode: preset(mode)).pack(side="left", padx=(0, 6))
+
+        def apply():
+            self.checkpoint_edit("str")
+            for key, x, y in choices:
+                self.panel_labels[key] = {"x": x.get(), "y": y.get()}
+            dialog.destroy()
+            if not self.busy:
+                self.preview()
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text=self.tr("取消"), command=dialog.destroy).pack(side="right")
+        ttk.Button(buttons, text=self.tr("应用"), command=apply,
+                   style="Accent.TButton").pack(side="right", padx=8)
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        self.tooltips.register_tree(dialog)
+
     def settings(self):
         options = {key: variable.get() for key, variable in self.vars.items()}
         options["quantities"] = [q for q in QUANTITIES if self.quantity_vars[q].get()]
@@ -1038,6 +1153,7 @@ class TonyPlotApp(tk.Tk):
             f"code:{self.extra_field_codes[index]}" for index in self.field_list.curselection()
         )
         options["field_settings"] = {key: value.copy() for key, value in self.field_settings.items()}
+        options["panel_labels"] = copy.deepcopy(self.panel_labels)
         options["files"] = list(self.files)
         get = options.__getitem__
         quantities = options["quantities"]
@@ -1175,8 +1291,14 @@ class TonyPlotApp(tk.Tk):
                      if is_log and "curve_code" in options else self.figure_edits[kind])
             editor = FigureEditor(self, figure, canvas, edits,
                                   self.log_status if is_log else self.status)
+            editor.edit_kind = kind
             editor.arrow_button = ttk.Button(toolbar, text="添加箭头", command=editor.start_arrow)
             editor.arrow_button.pack(side="left", padx=8)
+            undo = ttk.Button(toolbar, text=self.tr("撤销"), command=lambda: self.undo_edit(kind),
+                              state="normal" if self.undo_history[kind] else "disabled")
+            undo.pack(side="left", padx=4)
+            self.undo_buttons[kind] = undo
+            self.tooltips.register(undo, "撤销上一次已确认的图形编辑（Ctrl+Z），最多保留 50 步。")
             self.tooltips.register(editor.arrow_button,
                                    "依次点击图中的起点和终点，再设置标注文字、颜色与线宽。")
             self.tooltips.register_tree(toolbar)
@@ -1246,8 +1368,12 @@ class TonyPlotApp(tk.Tk):
             messagebox.showinfo(self.tr("请先画图"),
                                 self.tr("点击顶部“画图 / 更新预览”，完成后再导出。"))
             return
-        image_dir = Path(__file__).resolve().parent.parent / "imgs"
-        image_dir.mkdir(exist_ok=True)
+        directory = self.log_directory_var if kind == "log" else self.directory_var
+        files = self.log_files if kind == "log" else self.files
+        selected_directory = directory.get().strip()
+        image_dir = Path(selected_directory).expanduser() if selected_directory else None
+        if image_dir is None or not image_dir.is_dir():
+            image_dir = files[0].parent if files else Path.home()
         if kind == "log":
             default_name = f"{self.log_files[0].parent.name}_log_curves.png" if self.log_files else "log_curves.png"
         else:

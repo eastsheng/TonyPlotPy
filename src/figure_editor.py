@@ -10,7 +10,7 @@ from matplotlib.colors import is_color_like, to_hex
 from matplotlib.text import Annotation
 
 from .plotting.figure_edits import (
-    add_arrow, apply_line_style, refresh_legend, set_tick_font_family,
+    add_arrow, apply_line_style, refresh_legend, set_tick_font_family, apply_colorbar_style,
 )
 from .plotting.font_presets import available_paper_fonts
 
@@ -32,6 +32,12 @@ class FigureEditor:
             return
         if not event.dblclick or event.button != 1:
             return
+        for axis in self.figure.axes:
+            if hasattr(axis, "_tonyplot_colorbar_key"):
+                box = axis.get_tightbbox(self.canvas.get_renderer())
+                if event.inaxes is axis or (box is not None and box.contains(event.x, event.y)):
+                    self.edit_colorbar(axis)
+                    return
         for axis in self.figure.axes:
             for artist in axis.texts:
                 if isinstance(artist, Annotation) and hasattr(artist, "_tonyplot_arrow_index"):
@@ -112,6 +118,8 @@ class FigureEditor:
 
         def apply():
             if preview():
+                if hasattr(self.root, "checkpoint_edit") and hasattr(self, "edit_kind"):
+                    self.root.checkpoint_edit(self.edit_kind)
                 commit()
                 window.destroy()
 
@@ -403,6 +411,87 @@ class FigureEditor:
                 figure_title.set_fontsize(original_title_size)
             self.figure.tight_layout(pad=0.5)
             self.canvas.draw_idle()
+
+        self._buttons(window, body, preview, commit, rollback)
+        window.focus_set()
+
+    def edit_colorbar(self, axis):
+        self.canvas.draw()
+        window, body = self._dialog("编辑色棒")
+        bars = [item for item in self.figure.axes if hasattr(item, "_tonyplot_colorbar_key")]
+        originals = {}
+        for item in bars:
+            box = item.get_position()
+            width, height = self.figure.get_size_inches()
+            ticks = item.get_yticklabels()
+            values = getattr(item, "_tonyplot_colorbar_style", {
+                "width": box.width * width, "height": box.height * height,
+                "dx": 0., "dy": 0., "label": item.get_ylabel(),
+                "label_size": item.yaxis.label.get_fontsize(),
+                "tick_size": ticks[0].get_fontsize() if ticks else 8,
+                "font_family": item.yaxis.label.get_fontfamily()[0],
+                "color": to_hex(item.yaxis.label.get_color()),
+                "linewidth": item._colorbar.outline.get_linewidth(),
+            }).copy()
+            originals[item] = (values, item.get_axes_locator(), item.get_box_aspect(),
+                               item.get_aspect(), hasattr(item, "_tonyplot_colorbar_style"),
+                               ticks[0].get_color() if ticks else values["color"],
+                               item._colorbar.outline.get_edgecolor(),
+                               getattr(item, "_colorbar_info", {}).get("aspect"))
+        original = originals[axis][0]
+        fields = {}
+        for label, key in (("色棒长度 (英寸)", "height"), ("色棒宽度 (英寸)", "width"),
+                           ("水平偏移 (英寸)", "dx"), ("垂直偏移 (英寸)", "dy"),
+                           ("标签字号", "label_size"), ("刻度字号", "tick_size"),
+                           ("边框线宽", "linewidth")):
+            fields[key] = self._entry(body, label, f"{original[key]:.4g}")
+        label = self._entry(body, "色棒标签", original["label"])
+        family = self._font_entry(body, original["font_family"])
+        color = self._color_entry(body, original["color"])
+        all_bars = tk.BooleanVar(value=False)
+        ttk.Checkbutton(body, text="将尺寸和样式应用到全部色棒", variable=all_bars).pack(anchor="w", pady=5)
+        pending = {}
+
+        def rollback():
+            for item, (values, locator, box_aspect, aspect, had_style, tick_color, border_color, bar_aspect) in originals.items():
+                apply_colorbar_style(item, values)
+                item.set_axes_locator(locator)
+                item.set_box_aspect(box_aspect)
+                item.set_aspect(aspect)
+                if bar_aspect is not None:
+                    item._colorbar_info["aspect"] = bar_aspect
+                item.tick_params(colors=tick_color)
+                item._colorbar.outline.set_edgecolor(border_color)
+                if not had_style:
+                    del item._tonyplot_colorbar_style
+            self.canvas.draw_idle()
+
+        def preview():
+            try:
+                values = {key: float(value.get()) for key, value in fields.items()}
+                if not all(math.isfinite(value) for value in values.values()):
+                    raise ValueError("请输入有限数值")
+                if values["width"] <= 0 or values["height"] <= 0:
+                    raise ValueError("色棒长度和宽度必须大于 0")
+                if not 5 <= values["label_size"] <= 72 or not 5 <= values["tick_size"] <= 72 or not 0 <= values["linewidth"] <= 10:
+                    raise ValueError("色棒字号或线宽超出范围")
+                values.update(label=label.get(), font_family=family.get(), color=self._valid_color(color.get()))
+            except ValueError as exc:
+                messagebox.showerror("参数无效", str(exc), parent=window)
+                return False
+            rollback()
+            pending.clear()
+            for item in bars if all_bars.get() else [axis]:
+                style = values.copy()
+                if item is not axis:
+                    style["label"] = originals[item][0]["label"]
+                apply_colorbar_style(item, style)
+                pending[item._tonyplot_colorbar_key] = style
+            self.canvas.draw_idle()
+            return True
+
+        def commit():
+            self.edits.setdefault("colorbars", {}).update(copy.deepcopy(pending))
 
         self._buttons(window, body, preview, commit, rollback)
         window.focus_set()

@@ -8,6 +8,7 @@ import matplotlib.tri as mtri
 import numpy as np
 from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
+from matplotlib.transforms import Bbox
 
 from . import atlas_engine as engine
 
@@ -25,6 +26,17 @@ def quantity_label(quantity: str) -> str:
 
 def optional_float(value: str) -> float | None:
     return None if str(value).strip().lower() in ("", "auto", "none") else float(value)
+
+
+def panel_layout(options):
+    """Return panel order and column count for both the renderer and settings UI."""
+    count = len(options["files"])
+    quantities = options["quantities"]
+    if options["layout"] == "时间 × 物理量":
+        return [(i, q) for i in range(count) for q in quantities], len(quantities)
+    panels = [(i, q) for q in quantities for i in range(count)]
+    columns = count if options["layout"] == "物理量 × 时间" else int(options["columns"])
+    return panels, columns
 
 
 def read_structure(path: Path, options: dict, cache: dict) -> engine.Structure:
@@ -93,15 +105,7 @@ def make_figure(options: dict, cache: dict) -> Figure:
     quantities, bounds, files = options["quantities"], options["bounds"], options["files"]
     structures = [read_structure(path, options, cache) for path in files]
     labels = [engine.snapshot_info(str(path))[1] for path in files]
-    layout = options["layout"]
-    panels = [(i, q) for q in quantities for i in range(len(structures))]
-    if layout == "时间 × 物理量":
-        panels = [(i, q) for i in range(len(structures)) for q in quantities]
-        columns = len(quantities)
-    elif layout == "物理量 × 时间":
-        columns = len(structures)
-    else:
-        columns = int(options["columns"])
+    panels, columns = panel_layout(options)
     if columns < 1:
         raise ValueError("列数必须至少为 1")
     rows = math.ceil(len(panels) / columns)
@@ -115,11 +119,22 @@ def make_figure(options: dict, cache: dict) -> Figure:
     rotated = options["orientation"].startswith("横向")
     overlay = options["overlay"]
     field_settings = options.get("field_settings", {})
+    shared_currents = set(quantities) & {"electron", "hole", "total"}
+    if len(shared_currents) < 2:
+        shared_currents = set()
     norms = {
-        quantity: field_norm(structures, quantity, bounds, field_settings.get(quantity, {}))
+        quantity: field_norm(structures, quantity, bounds,
+                             {} if quantity in shared_currents else field_settings.get(quantity, {}))
         for quantity in quantities
     }
-    colorbar_groups = {quantity: {"axes": [], "image": None} for quantity in quantities}
+    if shared_currents:
+        current_norms = [norms[q] for q in shared_currents]
+        norm_type = LogNorm if options["scale"] == "log" else Normalize
+        common_norm = norm_type(vmin=min(norm.vmin for norm in current_norms),
+                                vmax=max(norm.vmax for norm in current_norms), clip=True)
+        for quantity in shared_currents:
+            norms[quantity] = common_norm
+    colorbar_groups = {}
     x0, x1, y0, y1 = bounds
     for index, (file_index, quantity) in enumerate(panels):
         ax = axes.flat[index]
@@ -128,7 +143,7 @@ def make_figure(options: dict, cache: dict) -> Figure:
             tri = mtri.Triangulation(structure.y, structure.x, structure.triangles)
         else:
             tri = mtri.Triangulation(structure.x, structure.y, structure.triangles)
-        field_options = field_settings.get(quantity, {})
+        field_options = {} if quantity in shared_currents else field_settings.get(quantity, {})
         cmap_key = "temperature_cmap" if quantity == "temperature" else "current_cmap"
         cmap_name = field_options.get("cmap", "默认")
         if cmap_name == "默认":
@@ -146,8 +161,10 @@ def make_figure(options: dict, cache: dict) -> Figure:
             else:
                 engine.CURRENT_CONTOUR_BANDS = int(options["current_bands"])
         image = engine.draw_field(ax, tri, structure.values[quantity], quantity, cmap, norms[quantity])
-        colorbar_groups[quantity]["axes"].append(ax)
-        colorbar_groups[quantity]["image"] = image
+        group_key = "shared_current" if quantity in shared_currents else quantity
+        group = colorbar_groups.setdefault(group_key, {"axes": [], "image": None})
+        group["axes"].append(ax)
+        group["image"] = image
         ax.set_facecolor("#f8fbfd")
         if rotated:
             ax.set_xlim(y0 - (1.25 if overlay else 0), y1)
@@ -171,7 +188,13 @@ def make_figure(options: dict, cache: dict) -> Figure:
                 if electrode in structure.electrodes:
                     engine.plot_region(ax, structure, structure.electrodes[electrode], color,
                                        rotated=rotated)
-        ax.set_title(f"{labels[file_index]} · {quantity_label(quantity)}", fontsize=9,
+        visibility = options.get("panel_labels", {}).get((str(files[file_index]), quantity), {})
+        ax.xaxis.label.set_visible(visibility.get("x", True))
+        ax.yaxis.label.set_visible(visibility.get("y", True))
+        panel_title = labels[file_index]
+        if options.get("show_quantity_title", False):
+            panel_title += f" · {quantity_label(quantity)}"
+        ax.set_title(panel_title, fontsize=9,
                      color="#183b56", pad=7)
         ax.tick_params(direction="in", labelsize=8, colors="#52687a", width=0.7)
         if options.get("grid", False):
@@ -184,11 +207,31 @@ def make_figure(options: dict, cache: dict) -> Figure:
     for ax in list(axes.flat)[len(panels):]:
         ax.set_visible(False)
     for quantity, group in colorbar_groups.items():
+        panel_rows = {index // columns
+                      for index, (_file_index, q) in enumerate(panels)
+                      if (q in shared_currents if quantity == "shared_current" else q == quantity)}
+        row_span = max(panel_rows) - min(panel_rows) + 1
+        shrink = 0.78 / row_span if quantity == "shared_current" else 0.78
         colorbar = engine.add_colorbar(
-            figure, group["image"], ax=group["axes"], label=quantity_label(quantity),
-            shrink=0.78, pad=0.025,
+            figure, group["image"], ax=group["axes"],
+            label=(r"Current density $|J|$ (A/cm$^2$)" if quantity == "shared_current"
+                   else quantity_label(quantity)),
+            shrink=shrink, pad=0.025,
         )
+        if quantity == "shared_current":
+            base_locator = colorbar.ax.get_axes_locator()
+
+            def compact_locator(axis, canvas_renderer, base=base_locator, parents=tuple(group["axes"])):
+                box = base(axis, canvas_renderer)
+                height = min(parent.get_position().height for parent in parents) * 0.78
+                figure_width, figure_height = axis.figure.get_size_inches()
+                width = height * figure_height / figure_width / 20
+                return Bbox.from_bounds(box.x0 + (box.width - width) / 2,
+                                        box.y0 + (box.height - height) / 2, width, height)
+
+            colorbar.ax.set_axes_locator(compact_locator)
         colorbar.ax.tick_params(labelsize=8, colors="#52687a")
+        colorbar.ax._tonyplot_colorbar_key = quantity
         colorbar.outline.set_edgecolor("#b8cbd8")
     figure.suptitle(files[0].parent.name, fontsize=12, color="#183b56")
     return figure

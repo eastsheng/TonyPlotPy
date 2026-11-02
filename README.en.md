@@ -15,6 +15,14 @@ STR and LOG have separate tabs, file lists, parameters, previews, and export con
 
 ## STR maps
 
+Panel titles show only time or file labels by default. Quantity names remain on the colorbars. Enable **Show quantity in panel titles** to include quantity names in panel titles as well.
+
+Selecting two or more of electron, hole, and total current density uses one shared current-density colorbar. These maps use the global current colormap, scale, limits, and contour bands; automatic limits cover all selected current quantities. Individual overrides are replaced by the global settings in this case. Temperature and other quantities retain separate colorbars.
+
+Double-click a colorbar, its label, or ticks to edit its length, width, horizontal/vertical offset (inches), label text, label/tick font sizes, font, color, and outline width. **Apply size and style to all colorbars** gives them matching dimensions while retaining their own labels. Preview, cancel/restore, and confirm/save are supported; edits persist through plotting and export.
+
+Use **Panel axis labels…** to choose X/Y axis names for each panel, identified by row/column, file, and quantity. Presets show all, keep outer labels only, or hide all. Tick numbers remain visible. Panel spacing is recalculated automatically; **Apply** refreshes the preview and exports use the same layout.
+
 Select a folder containing `.str` files or add files individually. Choose physical fields, view limits, cell mirroring, color scales, rendering method, and panel layout, then click **Plot / update preview**. A blank color limit selects an automatic range. For a logarithmic current scale, a zero or blank lower limit selects a positive value automatically.
 
 Only explicitly named nodal fields found in every selected file are listed. Current and temperature have common checkboxes; other named fields can be selected with Ctrl/Shift and included in a combined figure. Double-click a field or common checkbox to override its colormap, linear/log scale, range, and contour bands. Blank values use global or automatic settings. Unnamed Atlas field numbers remain available to the parser but are hidden in the interface.
@@ -41,7 +49,7 @@ Use **Add arrow** on the preview toolbar and click its start and end points in t
 
 Chinese is the default language. Use **Settings** on either tab to switch between Chinese and English immediately. You can also select blue, red, teal, or purple themes; change interface font size, default export DPI (300 by default), and window size. Preferences are saved in `settings.json` and restored on the next launch. The app version appears at the bottom of each tab and in Settings.
 
-The file chooser opens `imgs/` by default for exports. Hover over controls for help. The mouse wheel scrolls the list under the pointer or the settings panel. You can resize the settings and preview panels by dragging their divider.
+The export dialog opens the data folder selected on the current tab. If no folder is selected, it uses the first data file's folder. Hover over controls for help. The mouse wheel scrolls the list under the pointer or the settings panel. You can resize the settings and preview panels by dragging their divider.
 
 ## Project files
 
@@ -55,7 +63,9 @@ The file chooser opens `imgs/` by default for exports. Hover over controls for h
 - `src/ui_settings.py`, `src/i18n.py`: preferences and translations
 - `src/tooltips.py`, `src/control_hints.py`: hover help
 - `src/make_icon.py`: icon generator (requires Pillow)
-- `imgs/`: app icons and default figure export folder
+- `imgs/`: app icons
+
+The preview toolbar's **Undo** (Ctrl+Z) restores confirmed text, curve, axis, colorbar, figure-size, and arrow edits, as well as STR panel-label and field settings. STR and LOG have separate histories of up to 50 steps, cleared when the app closes.
 
 ## License
 

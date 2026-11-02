@@ -7,6 +7,18 @@ from .control_hints import HINTS
 
 
 ENGLISH = {
+    "撤销": "Undo",
+    "撤销上一次已确认的图形编辑（Ctrl+Z），最多保留 50 步。": "Undo the last confirmed figure edit (Ctrl+Z); up to 50 steps are retained.",
+    "编辑色棒": "Edit colorbar", "色棒长度 (英寸)": "Bar length (in)",
+    "色棒宽度 (英寸)": "Bar width (in)", "水平偏移 (英寸)": "Horizontal offset (in)",
+    "垂直偏移 (英寸)": "Vertical offset (in)", "标签字号": "Label font size",
+    "边框线宽": "Outline width", "色棒标签": "Colorbar label",
+    "将尺寸和样式应用到全部色棒": "Apply size and style to all colorbars",
+    "子图轴标签…": "Panel axis labels…", "子图轴标签": "Panel axis labels",
+    "全部显示": "Show all", "仅显示外侧": "Outer labels only", "全部隐藏": "Hide all",
+    "勾选表示显示轴名称；不影响刻度数字。隐藏后自动收紧行列间距。": "Select axis names to show; tick numbers stay visible. Spacing adjusts automatically when labels are hidden.",
+    "显示物理量标题": "Show quantity in panel titles",
+    "在子图标题中显示物理量名称；关闭时仅保留时间或文件标签，色棒标签不变。": "Include the quantity in panel titles. When off, keep only time or file labels; colorbar labels remain visible.",
     "Atlas STR 云图": "Atlas STR maps",
     "LOG 曲线": "LOG curves",
     "软件设置": "Settings", "语言": "Language", "颜色主题": "Color theme",
@@ -125,7 +137,7 @@ ENGLISH = {
     "Ctrl/Shift 可多选；选中的曲线用于叠加、子图或单独导出。": "Ctrl/Shift selects multiple curves for overlay, subplots, or separate export.",
     "此曲线使用右侧 Y 轴；未选中的曲线使用左侧 Y 轴。": "Selected curves use the right Y axis; the others use the left Y axis.",
     "在后台读取文件并更新预览。修改参数后再次点击生效。": "Read files and update the preview in the background. Click again after changing parameters.",
-    "将当前预览导出为 PNG、PDF 或 SVG；图片默认保存到 imgs 文件夹。": "Export the preview as PNG, PDF, or SVG; imgs is the default destination.",
+    "将当前预览导出为 PNG、PDF 或 SVG；默认打开当前页签选择的数据目录。": "Export the preview as PNG, PDF, or SVG; the dialog opens the data folder selected on this tab.",
     "切换主题、界面字号、默认导出 DPI 和窗口尺寸。": "Change theme, interface font size, export DPI, window size, and language.",
     "打开文件夹选择器。选定后自动加载目录中的数据文件。": "Choose a folder and load its data files automatically.",
     "读取输入框中的目录，更新文件和可选字段列表。": "Read the entered folder and refresh file and field lists.",

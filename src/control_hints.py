@@ -1,6 +1,7 @@
 """Short explanations shown beside plotting controls on hover."""
 
 HINTS = {
+    "show_quantity_title": "在子图标题中显示物理量名称；关闭时仅保留时间或文件标签，色棒标签不变。",
     "orientation": "选择云图坐标方向；横向模式会把深度放在横轴。",
     "layout": "控制 STR 子图排列。自由网格使用下面的列数。",
     "columns": "自由网格每行的子图数；修改后自动切换到自由网格。",

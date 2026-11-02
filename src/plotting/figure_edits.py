@@ -1,6 +1,41 @@
 """Apply saved visual edits to freshly rendered Matplotlib figures."""
 from __future__ import annotations
 
+from matplotlib.transforms import Bbox
+
+
+class ColorbarLocator:
+    """Keep custom physical dimensions while following automatic panel layout."""
+
+    def __init__(self, base, values):
+        self.base = base
+        self.values = values
+
+    def __call__(self, axis, renderer):
+        box = self.base(axis, renderer) if self.base else axis.get_position(original=True)
+        width, height = axis.figure.get_size_inches()
+        values = self.values
+        w, h = values["width"] / width, values["height"] / height
+        return Bbox.from_bounds(box.x0 + box.width / 2 - w / 2 + values["dx"] / width,
+                                box.y0 + box.height / 2 - h / 2 + values["dy"] / height, w, h)
+
+
+def apply_colorbar_style(axis, values):
+    locator = axis.get_axes_locator()
+    base = locator.base if isinstance(locator, ColorbarLocator) else locator
+    if hasattr(axis, "_colorbar_info"):
+        axis._colorbar_info["aspect"] = values["height"] / values["width"]
+    axis.set_box_aspect(None)
+    axis.set_aspect("auto")
+    axis.set_axes_locator(ColorbarLocator(base, values.copy()))
+    axis.set_ylabel(values["label"], fontsize=values["label_size"],
+                    color=values["color"], fontfamily=values["font_family"])
+    axis.tick_params(labelsize=values["tick_size"], colors=values["color"])
+    set_tick_font_family(axis, values["font_family"])
+    axis._colorbar.outline.set_edgecolor(values["color"])
+    axis._colorbar.outline.set_linewidth(values["linewidth"])
+    axis._tonyplot_colorbar_style = values.copy()
+
 
 def add_arrow(figure, values: dict, index: int):
     """Draw one editable annotation from saved data coordinates."""
@@ -121,3 +156,7 @@ def apply_edits(figure, edits: dict) -> None:
             add_arrow(figure, values, index)
         except (IndexError, KeyError, ValueError):
             continue
+    for axis in figure.axes:
+        key = getattr(axis, "_tonyplot_colorbar_key", None)
+        if key in edits.get("colorbars", {}):
+            apply_colorbar_style(axis, edits["colorbars"][key])
