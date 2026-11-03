@@ -1,6 +1,9 @@
 """Short explanations shown beside plotting controls on hover."""
 
 HINTS = {
+    "structure_labels": "材料图中显示电极名称、N/P 类型及 PN 结标注；关闭后保留材料填色和已启用的结线。",
+    "materials_only": "按 STR 材料编号着色，不绘制物理场；相同材料使用相同颜色，并显示材料图例。",
+    "mesh": "显示 STR 原始三角网格；可用于云图或仅显示材料模式，与坐标网格独立。",
     "show_quantity_title": "在子图标题中显示物理量名称；关闭时仅保留时间或文件标签，色棒标签不变。",
     "orientation": "选择云图坐标方向；横向模式会把深度放在横轴。",
     "layout": "控制 STR 子图排列。自由网格使用下面的列数。",

@@ -24,14 +24,31 @@ class FigureEditor:
         self.status = status
         self.arrow_start = None
         self.arrow_mode = False
+        self._material_drag = None
         canvas.mpl_connect("button_press_event", self.on_press)
+        canvas.mpl_connect("button_release_event", self.on_release)
 
     def on_press(self, event):
+        if event.button == 3:
+            if not getattr(self.canvas.toolbar, "mode", ""):
+                self.open_context_menu(event)
+            return
+        if event.button == 1 and not event.dblclick and not getattr(self.canvas.toolbar, "mode", ""):
+            for axis in self.figure.axes:
+                legend = axis.get_legend()
+                if hasattr(axis, "_tonyplot_materials") and legend is not None and legend.contains(event)[0]:
+                    self._material_drag = (axis, legend, copy.deepcopy(legend._loc))
+                    break
         if self.arrow_mode and event.button == 1:
             self._arrow_click(event)
             return
         if not event.dblclick or event.button != 1:
             return
+        for axis in self.figure.axes:
+            legend = axis.get_legend()
+            if hasattr(axis, "_tonyplot_materials") and legend is not None and legend.contains(event)[0]:
+                self.edit_material_legend(axis)
+                return
         for axis in self.figure.axes:
             if hasattr(axis, "_tonyplot_colorbar_key"):
                 box = axis.get_tightbbox(self.canvas.get_renderer())
@@ -81,7 +98,56 @@ class FigureEditor:
         else:
             self.edit_figure()
 
-    def _dialog(self, title):
+    def on_release(self, event):
+        if self._material_drag is None:
+            return
+        axis, legend, old_position = self._material_drag
+        self._material_drag = None
+        if legend._loc == old_position:
+            return
+        if hasattr(self.root, "checkpoint_edit") and hasattr(self, "edit_kind"):
+            self.root.checkpoint_edit(self.edit_kind)
+        values = copy.deepcopy(axis._tonyplot_material_legend_style)
+        values["location"] = tuple(legend._loc)
+        axis._tonyplot_material_legend_style = values
+        self.edits.setdefault("material_legends", {})[axis._tonyplot_axis_key] = copy.deepcopy(values)
+
+    def open_context_menu(self, event):
+        menu = tk.Menu(self.root, tearoff=False)
+        self.context_menu = menu
+        tr = self.root.tr if hasattr(self.root, "tr") else str
+
+        def edit_target():
+            target = copy.copy(event)
+            target.button = 1
+            target.dblclick = True
+            self.arrow_mode = False
+            self.on_press(target)
+
+        menu.add_command(label=tr("编辑此元素…"), command=edit_target)
+        menu.add_command(label=tr("编辑图片尺寸"), command=self.edit_figure)
+        menu.add_command(label=tr("添加箭头"), command=self.start_arrow)
+        if hasattr(self.root, "undo_edit") and hasattr(self, "edit_kind"):
+            menu.add_separator()
+            menu.add_command(label=tr("撤销"), command=lambda: self.root.undo_edit(self.edit_kind))
+        if hasattr(self.root, "save_plot_set"):
+            menu.add_separator()
+            menu.add_command(label=tr("保存配置"), command=self.root.save_plot_set)
+            menu.add_command(label=tr("导入配置"), command=self.root.import_plot_set)
+        gui = getattr(event, "guiEvent", None)
+        if gui is not None and hasattr(gui, "x_root"):
+            x, y = gui.x_root, gui.y_root
+        else:
+            widget = self.canvas.get_tk_widget()
+            dx, dy = getattr(self.canvas, "_image_offset", (0, 0))
+            x = widget.winfo_rootx() + event.x + dx
+            y = widget.winfo_rooty() + self.figure.bbox.height - event.y + dy
+        try:
+            menu.tk_popup(int(x), int(y))
+        finally:
+            menu.grab_release()
+
+    def _dialog(self, title, scroll=True):
         window = tk.Toplevel(self.root)
         window.title(self.root.tr(title) if hasattr(self.root, "tr") else title)
         window.transient(self.root)
@@ -90,11 +156,54 @@ class FigureEditor:
         window.grab_set()
         body = ttk.Frame(window, padding=16)
         body.pack(fill="both", expand=True)
+        if scroll:
+            window.geometry(f"480x{min(720, self.root.winfo_screenheight() - 120)}")
+            viewport = tk.Canvas(body, highlightthickness=0)
+            scrollbar = ttk.Scrollbar(body, orient="vertical", command=viewport.yview)
+            viewport.configure(yscrollcommand=scrollbar.set)
+            scrollbar.pack(side="right", fill="y")
+            viewport.pack(side="left", fill="both", expand=True)
+            content = ttk.Frame(viewport)
+            item = viewport.create_window((0, 0), window=content, anchor="nw")
+            content.bind("<Configure>", lambda _event: viewport.configure(scrollregion=viewport.bbox("all")))
+            viewport.bind("<Configure>", lambda event: viewport.itemconfigure(item, width=event.width))
+            window.bind("<MouseWheel>", lambda event: viewport.yview_scroll(-int(event.delta / 120), "units"))
+            body = content
         if hasattr(self.root, "tooltips"):
             def finish_dialog():
                 if window.winfo_exists():
                     if hasattr(self.root, "_localize_tree"):
                         self.root._localize_tree(window)
+                    style = ttk.Style(self.root)
+                    style.configure("Editor.TLabel", font=("Segoe UI", 10))
+                    style.configure("Editor.TCheckbutton", font=("Segoe UI", 10))
+                    style.configure("Editor.TButton", font=("Segoe UI", 9), padding=(8, 5))
+                    def compact(widget):
+                        if isinstance(widget, ttk.Label):
+                            widget.configure(style="Editor.TLabel", width=0, wraplength=145)
+                        elif isinstance(widget, (ttk.Entry, ttk.Combobox)):
+                            widget.configure(font=("Segoe UI", 10))
+                        elif isinstance(widget, ttk.Checkbutton):
+                            widget.configure(style="Editor.TCheckbutton")
+                        elif isinstance(widget, ttk.Button):
+                            widget.configure(style="Editor.TButton")
+                        children = widget.winfo_children()
+                        captions = [child for child in children if isinstance(child, ttk.Label)]
+                        controls = [child for child in children if isinstance(child, (ttk.Entry, ttk.Combobox))]
+                        if len(captions) == 1 and controls:
+                            for child in children:
+                                child.pack_forget()
+                            widget.columnconfigure(0, minsize=155)
+                            widget.columnconfigure(1, weight=1)
+                            captions[0].grid(row=0, column=0, sticky="w", padx=(0, 8))
+                            for index, control in enumerate(child for child in children if child is not captions[0]):
+                                control.grid(row=0, column=index + 1, sticky="ew", padx=(0, 4))
+                        for child in children:
+                            compact(child)
+                    compact(body)
+                    window.update_idletasks()
+                    if scroll:
+                        window.geometry(f"500x{min(body.winfo_reqheight() + 36, self.root.winfo_screenheight() - 120)}")
                     self.root.tooltips.register_tree(window)
             window.after_idle(finish_dialog)
         return window, body
@@ -640,39 +749,154 @@ class FigureEditor:
         self._buttons(window, body, preview, commit, rollback)
         window.focus_set()
 
-    def edit_figure(self):
-        window, body = self._dialog("编辑图片尺寸")
-        width, height = getattr(self.figure, "_tonyplot_export_size", self.figure.get_size_inches())
-        preview_size = tuple(self.figure.get_size_inches())
-        widget = self.canvas.get_tk_widget()
-        widget_size = (widget.cget("width"), widget.cget("height"))
-        width_var = self._entry(body, "宽度 (英寸)", f"{width:g}")
-        height_var = self._entry(body, "高度 (英寸)", f"{height:g}")
+    def edit_material_legend(self, axis):
+        from .plotting.material_renderer import apply_material_legend
+        window, body = self._dialog("编辑材料图例", scroll=True)
+        original = copy.deepcopy(axis._tonyplot_material_legend_style)
+        title = self._entry(body, "图例标题", original.get("title", ""))
+        size = self._entry(body, "图例字号", original.get("size", 7))
+        title_size = self._entry(body, "标题字号", original.get("title_size", 8))
+        columns = self._entry(body, "图例列数", original.get("columns", 1))
+        family = self._font_entry(body, original.get("font_family", "Arial"))
+        color = self._color_entry(body, original.get("color", "#1e293b"), "文字颜色")
+        original_location = original.get("location", "lower right")
+        location = tk.StringVar(value="custom" if isinstance(original_location, (tuple, list)) else original_location)
+        box = axis.get_legend().get_window_extent(self.canvas.get_renderer())
+        anchor = axis.transAxes.inverted().transform((box.x0, box.y0))
+        position_x = self._entry(body, "图例水平位置", f"{anchor[0]:.4g}")
+        position_y = self._entry(body, "图例垂直位置", f"{anchor[1]:.4g}")
+        row = ttk.Frame(body); row.pack(fill="x", pady=4)
+        ttk.Label(row, text="图例位置", width=12).pack(side="left")
+        ttk.Combobox(row, textvariable=location, state="readonly", width=30,
+                     values=("custom", "lower right", "lower left", "upper right", "upper left", "center right", "center left", "upper center", "lower center", "center")).pack(side="left")
+        if hasattr(self.root, "tooltips"):
+            hint = "custom：位置按坐标区比例设置；也可直接拖动图例"
+            for control in row.winfo_children():
+                self.root.tooltips.register(control, hint)
+        bold = tk.BooleanVar(value=original.get("bold", False))
+        frame = tk.BooleanVar(value=original.get("frame", False))
+        ttk.Checkbutton(body, text="加粗", variable=bold).pack(anchor="w")
+        ttk.Checkbutton(body, text="显示图例底色与边框", variable=frame).pack(anchor="w")
+        entries = {}
+        for name, item in axis._tonyplot_materials.items():
+            saved = original.get("entries", {}).get(name, {})
+            label = self._entry(body, name, saved.get("label", name))
+            fill = self._color_entry(body, saved.get("color", item["color"]), "材料颜色")
+            entries[name] = (label, fill)
+        pending = {}
 
         def preview():
             try:
-                size = (float(width_var.get()), float(height_var.get()))
-                if not all(math.isfinite(value) and 2 <= value <= 40 for value in size):
-                    raise ValueError("宽度和高度需在 2–40 英寸之间")
+                values = {"title": title.get(), "size": float(size.get()),
+                          "title_size": float(title_size.get()), "columns": int(columns.get()),
+                          "font_family": family.get(), "color": self._valid_color(color.get()),
+                          "location": location.get(), "bold": bold.get(), "frame": frame.get(),
+                          "entries": {name: {"label": label.get(), "color": self._valid_color(fill.get())}
+                                      for name, (label, fill) in entries.items()}}
+                if not (5 <= values["size"] <= 72 and 5 <= values["title_size"] <= 72 and 1 <= values["columns"] <= 10):
+                    raise ValueError("图例字号或列数超出范围")
+                if location.get() == "custom":
+                    position = (float(position_x.get()), float(position_y.get()))
+                    if not all(math.isfinite(value) for value in position):
+                        raise ValueError("请输入有限数值")
+                    values["location"] = position
             except ValueError as exc:
                 messagebox.showerror("参数无效", str(exc), parent=window)
                 return False
-            self.figure.set_size_inches(*size, forward=False)
-            if hasattr(self.figure, "_tonyplot_export_size"):
-                self.figure._tonyplot_export_size = size
-            widget.configure(width=int(size[0] * self.figure.dpi),
-                             height=int(size[1] * self.figure.dpi))
+            pending.clear(); pending.update(values)
+            apply_material_legend(axis, values)
             self.canvas.draw_idle()
             return True
 
         def commit():
-            self.edits["figure_size"] = (float(width_var.get()), float(height_var.get()))
+            self.edits.setdefault("material_legends", {})[axis._tonyplot_axis_key] = copy.deepcopy(pending)
+
+        def rollback():
+            apply_material_legend(axis, original)
+            self.canvas.draw_idle()
+
+        self._buttons(window, body, preview, commit, rollback)
+        window.focus_set()
+
+    def edit_figure(self):
+        window, body = self._dialog("编辑图片尺寸")
+        width, height = getattr(self.figure, "_tonyplot_export_size", self.figure.get_size_inches())
+        preview_size = tuple(self.figure.get_size_inches())
+        original_export_size = getattr(self.figure, "_tonyplot_export_size", None)
+        tr = self.root.tr if hasattr(self.root, "tr") else str
+        modes = ("宽高比例", "毫米 (mm)", "像素 (px)")
+        mode = tk.StringVar(value=tr(modes[0]))
+        row = ttk.Frame(body); row.pack(fill="x", pady=4)
+        ttk.Label(row, text=tr("尺寸方式"), width=12).pack(side="left")
+        selector = ttk.Combobox(row, textvariable=mode, values=[tr(item) for item in modes],
+                                state="readonly", width=30)
+        selector.pack(side="left")
+        width_var = self._entry(body, "宽度 / 比例", f"{20 * width / max(width, height):g}")
+        height_var = self._entry(body, "高度 / 比例", f"{20 * height / max(width, height):g}")
+        long_edge = self._entry(body, "比例模式长边 (mm)", "160")
+        if hasattr(self.root, "tooltips"):
+            hint = "比例 10:20 默认导出为 80×160 mm；器件坐标仍为 µm"
+            for field_row in body.winfo_children():
+                for control in field_row.winfo_children():
+                    self.root.tooltips.register(control, hint)
+        dpi_key = "log_dpi" if getattr(self, "edit_kind", "str") == "log" else "dpi"
+        export_dpi = int(self.root.vars[dpi_key].get()) if hasattr(self.root, "vars") else 300
+        pending_size = None
+
+        def dimensions(unit):
+            w, h = float(width_var.get()), float(height_var.get())
+            if not all(math.isfinite(value) and value > 0 for value in (w, h)):
+                raise ValueError("宽度和高度必须是大于 0 的有限数值")
+            if unit == modes[0]:
+                edge = float(long_edge.get())
+                if not math.isfinite(edge) or edge <= 0:
+                    raise ValueError("宽度和高度必须是大于 0 的有限数值")
+                return (edge / 25.4 * w / max(w, h), edge / 25.4 * h / max(w, h))
+            return (w / 25.4, h / 25.4) if unit == modes[1] else (w / export_dpi, h / export_dpi)
+
+        current_mode = modes[0]
+
+        def change_mode(_event):
+            nonlocal current_mode
+            try:
+                size = dimensions(current_mode)
+            except ValueError:
+                size = (160 / 25.4 * width / max(width, height), 160 / 25.4 * height / max(width, height))
+            current_mode = next(item for item in modes if tr(item) == mode.get())
+            factor = 20 / max(size) if current_mode == modes[0] else (25.4 if current_mode == modes[1] else export_dpi)
+            width_var.set(f"{size[0] * factor:g}")
+            height_var.set(f"{size[1] * factor:g}")
+            if current_mode == modes[0]:
+                long_edge.set(f"{max(size) * 25.4:g}")
+
+        selector.bind("<<ComboboxSelected>>", change_mode)
+
+        def preview():
+            nonlocal pending_size
+            try:
+                unit = next(item for item in modes if tr(item) == mode.get())
+                size = dimensions(unit)
+            except ValueError as exc:
+                messagebox.showerror("参数无效", str(exc), parent=window)
+                return False
+            pending_size = size
+            if hasattr(self.canvas, "set_preview_size"):
+                self.canvas.set_preview_size(size)
+            else:
+                self.figure.set_size_inches(*size, forward=False)
+                self.canvas.draw_idle()
+            return True
+
+        def commit():
+            self.edits["figure_size"] = pending_size
 
         def rollback():
             self.figure.set_size_inches(*preview_size, forward=False)
-            if hasattr(self.figure, "_tonyplot_export_size"):
-                self.figure._tonyplot_export_size = (width, height)
-            widget.configure(width=widget_size[0], height=widget_size[1])
+            if original_export_size is None:
+                if hasattr(self.figure, "_tonyplot_export_size"):
+                    del self.figure._tonyplot_export_size
+            else:
+                self.figure._tonyplot_export_size = original_export_size
             self.canvas.draw_idle()
 
         self._buttons(window, body, preview, commit, rollback)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -123,6 +123,7 @@ class Structure:
     electrodes: dict[str, int]
     values: dict[str, np.ndarray]
     field_codes: tuple[int, ...]
+    region_materials: dict[int, int] = field(default_factory=dict)
 
 
 def list_field_codes(path: Path) -> tuple[int, ...]:
@@ -164,6 +165,7 @@ def read_structure(path: Path) -> Structure:
     codes: list[int] | None = None
     electrodes: dict[str, int] = {}
     current_region: int | None = None
+    region_materials = {}
 
     with path.open("r", encoding="latin-1") as source:
         for line in source:
@@ -185,6 +187,7 @@ def read_structure(path: Path) -> Structure:
                 node_fields[int(parts[1])] = [float(x) for x in parts[3:]]
             elif line.startswith("r "):
                 current_region = int(line.split()[1])
+                region_materials[current_region] = int(line.split()[2])
             elif line.startswith("w ") and current_region is not None and '"' in line:
                 # w 记录将当前 region 与 Atlas 电极名称关联。
                 electrodes[line.split('"')[1].lower()] = current_region
@@ -246,6 +249,7 @@ def read_structure(path: Path) -> Structure:
         x=xy[:, 0], y=xy[:, 1], triangles=triangles,
         region_triangles=region_triangles, electrodes=electrodes, values=values,
         field_codes=tuple(codes),
+        region_materials=region_materials,
     )
 
 
@@ -286,11 +290,12 @@ def mirror_structure(structure: Structure, axis_x: float) -> Structure:
             for name, value in structure.values.items()
         },
         field_codes=structure.field_codes,
+        region_materials=structure.region_materials.copy(),
     )
 
 
 def plot_region(ax, structure: Structure, region_id: int, color: str | None,
-                rotated: bool = True) -> None:
+                rotated: bool = True, outline: bool = True) -> None:
     """按 .str 原始三角形填充材料，并画出该区域的外轮廓。"""
     triangles = structure.region_triangles.get(region_id)
     if triangles is None or triangles.size == 0:
@@ -301,6 +306,8 @@ def plot_region(ax, structure: Structure, region_id: int, color: str | None,
             xy[triangles], facecolor=color, edgecolor="none",
             linewidth=0, antialiased=False, zorder=2,
         ))
+    if not outline:
+        return
     edges = np.sort(
         np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]])),
         axis=1,
@@ -308,6 +315,15 @@ def plot_region(ax, structure: Structure, region_id: int, color: str | None,
     unique_edges, counts = np.unique(edges, axis=0, return_counts=True)
     outline = unique_edges[counts == 1]
     ax.add_collection(LineCollection(xy[outline], colors="#303030", linewidths=0.65, zorder=3))
+
+
+def plot_mesh(ax, structure: Structure, rotated=False):
+    triangles = structure.triangles
+    edges = np.unique(np.sort(np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]],
+                                             triangles[:, [2, 0]])), axis=1), axis=0)
+    xy = np.column_stack((structure.y, structure.x)) if rotated else np.column_stack((structure.x, structure.y))
+    ax.add_collection(LineCollection(xy[edges], colors="#334155", linewidths=0.25,
+                                     alpha=0.55, zorder=4, rasterized=True))
 
 
 def color_norm(structures: list[Structure], quantity: str, bounds: tuple[float, ...]):

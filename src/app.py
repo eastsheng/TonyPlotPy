@@ -22,13 +22,14 @@ from .plotting import renderer
 from .plotting import log_reader, log_renderer
 from .plotting.figure_edits import apply_edits
 from .figure_editor import FigureEditor
-from .deferred_canvas import DeferredFigureCanvasTkAgg
+from .deferred_canvas import DeferredFigureCanvasTkAgg, CenteredNavigationToolbar2Tk
 from .ui_settings import THEMES, WINDOW_SIZES, load_settings, save_settings
 from .tooltips import TooltipManager
 from .control_hints import hint_for
 from .version import APP_VERSION
 from .i18n import translate, LocalizedStringVar
 from .view_switcher import ViewSwitcher
+from .plot_config import save_config, load_config
 
 
 QUANTITIES = ("electron", "hole", "total", "temperature")
@@ -81,6 +82,11 @@ class TonyPlotApp(tk.Tk):
         self.busy = False
         self.gc_was_enabled = False
         self.render_results = queue.Queue()
+        self.file_load_ids = {"str": 0, "log": 0}
+        self.file_loading = set()
+        self.str_headers = {}
+        self.log_headers = {}
+        self._pending_set_curve = None
         self.vars: dict[str, tk.Variable] = {}
         self.localized_combos = []
         self.quantity_vars = {
@@ -533,9 +539,10 @@ class TonyPlotApp(tk.Tk):
         self.directory_entry = ttk.Entry(files, textvariable=self.directory_var)
         self.directory_entry.pack(fill="x")
         row = ttk.Frame(files); row.pack(fill="x", pady=4)
-        ttk.Button(row, text="选择目录", command=self.choose_directory).pack(side="left")
-        ttk.Button(row, text="加载目录", command=self.load_directory).pack(side="left")
-        ttk.Button(row, text="添加文件", command=self.add_files).pack(side="left")
+        self._wrap_buttons(row, [ttk.Button(row, text=label, command=command, style="Menu.TButton")
+                                for label, command in (("选择目录", self.choose_directory),
+                                                       ("加载目录", self.load_directory),
+                                                       ("添加文件", self.add_files))])
         self.file_list = tk.Listbox(files, selectmode="extended", height=7, exportselection=False,
                                     bg=SURFACE, fg=INK, selectbackground=ACCENT,
                                     selectforeground=SURFACE, relief="flat", borderwidth=1,
@@ -547,8 +554,10 @@ class TonyPlotApp(tk.Tk):
             buttons.append(ttk.Button(row, text=label, command=action, style="Menu.TButton"))
         self._wrap_buttons(row, buttons)
         ttk.Button(files, text="仅保留选中项", command=self.keep_selected).pack(fill="x")
+        self._config_buttons(files)
 
         view = self._section(controls, "视图与组合")
+        self._check(view, "仅显示材料（不绘制云图）", "materials_only", False)
         self._combo(view, "方向", "orientation", "纵向（x 横轴）", ("纵向（x 横轴）", "横向（深度横轴）"))
         self._combo(view, "排列", "layout", "物理量 × 时间", ("物理量 × 时间", "时间 × 物理量", "自由网格"))
         self._entry(view, "自由网格列数", "columns", 3)
@@ -584,7 +593,9 @@ class TonyPlotApp(tk.Tk):
         self._check(view, "镜像为完整单胞", "mirror", True)
         self._entry(view, "镜像轴 x (µm)", "mirror_x", 9.5)
         self._check(view, "显示结构与结线", "overlay", True)
+        self._check(view, "显示结构标注（材料图）", "structure_labels", True)
         self._check(view, "显示坐标网格", "grid", False)
+        self._check(view, "显示三角网格", "mesh", False)
         self._check(view, "显示物理量标题", "show_quantity_title", False)
         ttk.Button(view, text="子图轴标签…", command=self.open_panel_labels).pack(anchor="w", pady=4)
         self._entry(view, "x 最小值", "x0", 0)
@@ -791,13 +802,15 @@ class TonyPlotApp(tk.Tk):
         self.log_left_outer, self.log_left_scroll = left, scroll
 
         files = self._section(controls, "LOG 数据文件")
+        self._config_buttons(files)
         self.log_directory_var = tk.StringVar()
         self.log_directory_entry = ttk.Entry(files, textvariable=self.log_directory_var)
         self.log_directory_entry.pack(fill="x")
         row = ttk.Frame(files); row.pack(fill="x", pady=4)
-        ttk.Button(row, text="选择目录", command=self.choose_log_directory).pack(side="left")
-        ttk.Button(row, text="加载目录", command=self.load_log_directory).pack(side="left")
-        ttk.Button(row, text="添加文件", command=self.add_log_files).pack(side="left")
+        self._wrap_buttons(row, [ttk.Button(row, text=label, command=command, style="Menu.TButton")
+                                for label, command in (("选择目录", self.choose_log_directory),
+                                                       ("加载目录", self.load_log_directory),
+                                                       ("添加文件", self.add_log_files))])
         self.log_file_list = tk.Listbox(files, selectmode="extended", height=6,
                                         exportselection=False, bg=SURFACE, fg=INK,
                                         selectbackground=ACCENT, selectforeground=SURFACE)
@@ -871,6 +884,129 @@ class TonyPlotApp(tk.Tk):
         self.bind_class("LogSettingsScroll", "<MouseWheel>", self._scroll_log)
         self._install_scroll_tag(left, "LogSettingsScroll")
 
+    def _config_buttons(self, parent):
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=4)
+        self._wrap_buttons(row, [ttk.Button(row, text=label, command=command, style="Menu.TButton")
+                                for label, command in (("导入配置", self.import_plot_set),
+                                                       ("保存配置", self.save_plot_set))])
+
+    def _plot_state(self):
+        current_curve = None
+        if self.log_rendered and self.log_preview_combo.current() >= 0:
+            current_curve = self.log_rendered[self.log_preview_combo.current()][0]
+        state = {"active": self._active_kind(),
+                "files": {"str": [str(path) for path in self.files],
+                          "log": [str(path) for path in self.log_files]},
+                "vars": {key: value.get() for key, value in self.vars.items()},
+                "quantities": {key: value.get() for key, value in self.quantity_vars.items()},
+                "extra_fields": [self.extra_field_codes[i] for i in self.field_list.curselection()],
+                "log_x": self._selected_log_x_code(),
+                "log_y": [self.log_field_codes[i] for i in self.log_y_list.curselection()],
+                "log_right": [self.log_right_codes[i] for i in self.log_right_list.curselection()],
+                "log_curve": current_curve, "field_settings": copy.deepcopy(self.field_settings),
+                "panel_labels": copy.deepcopy(self.panel_labels),
+                "figure_edits": copy.deepcopy(self.figure_edits),
+                "log_single_edits": copy.deepcopy(self.log_single_edits)}
+        for kind, figure in (("str", self.figure), ("log", self.log_figure)):
+            if figure is None:
+                continue
+            if kind == "log" and current_curve is not None:
+                visual = state["log_single_edits"].setdefault(current_curve, {})
+            else:
+                visual = state["figure_edits"][kind]
+            for index, axis in enumerate(figure.axes):
+                if hasattr(axis, "_colorbar"):
+                    continue
+                ticks = axis.get_xticklabels() or axis.get_yticklabels()
+                values = visual.setdefault("axes", {}).setdefault(str(index), {})
+                values.update(xlim=tuple(axis.get_xlim()), ylim=tuple(axis.get_ylim()),
+                              xscale=axis.get_xscale(), yscale=axis.get_yscale(),
+                              tick_size=ticks[0].get_fontsize() if ticks else 8)
+                if hasattr(axis, "_tonyplot_axis_key"):
+                    values["axis_key"] = axis._tonyplot_axis_key
+        return state
+
+    def save_plot_set(self):
+        if self.busy or self.file_loading:
+            return
+        kind = self._active_kind()
+        files = self.log_files if kind == "log" else self.files
+        directory = self.log_directory_var.get() if kind == "log" else self.directory_var.get()
+        path = filedialog.asksaveasfilename(
+            title=self.tr("保存绘图配置"), initialdir=directory or (str(files[0].parent) if files else str(Path.home())),
+            initialfile="plot.set", defaultextension=".set",
+            filetypes=[("TonyPlotPy set", "*.set"), ("JSON", "*.json")])
+        if not path:
+            return
+        try:
+            save_config(path, self._plot_state())
+            (self.log_status if kind == "log" else self.status).set(self.tr("配置已保存：") + path)
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror(self.tr("配置保存失败"), str(exc), parent=self)
+
+    def import_plot_set(self):
+        if self.busy:
+            return
+        path = filedialog.askopenfilename(title=self.tr("导入绘图配置"),
+                                          filetypes=[("TonyPlotPy set", "*.set *.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            state = load_config(path)
+            # Validate the state shape before starting any asynchronous mutation.
+            for key in ("vars", "quantities", "figure_edits", "log_single_edits", "panel_labels", "field_settings"):
+                if not isinstance(state[key], dict):
+                    raise ValueError("Invalid configuration section: " + key)
+            files = {kind: [Path(name) for name in state["files"][kind]] for kind in ("str", "log")}
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror(self.tr("配置导入失败"), str(exc), parent=self)
+            return
+
+        def restore():
+            try:
+                for kind in ("str", "log"):
+                    self.checkpoint_edit(kind)
+                for key, value in state["vars"].items():
+                    if key in self.vars and key != "layout":
+                        self.vars[key].set(value)
+                if "layout" in state["vars"]:
+                    self.vars["layout"].set(state["vars"]["layout"])
+                for key, value in state["quantities"].items():
+                    if key in self.quantity_vars:
+                        self.quantity_vars[key].set(value)
+                self.field_list.selection_clear(0, "end")
+                for index, code in enumerate(self.extra_field_codes):
+                    if code in state.get("extra_fields", []):
+                        self.field_list.selection_set(index)
+                if state.get("log_x") in self.log_field_codes:
+                    self.log_x_combo.current(self.log_field_codes.index(state["log_x"]))
+                self.log_y_list.selection_clear(0, "end")
+                for index, code in enumerate(self.log_field_codes):
+                    if code in state.get("log_y", []):
+                        self.log_y_list.selection_set(index)
+                self._refresh_right_axis_choices()
+                self.log_right_list.selection_clear(0, "end")
+                for index, code in enumerate(self.log_right_codes):
+                    if code in state.get("log_right", []):
+                        self.log_right_list.selection_set(index)
+                self.field_settings = state["field_settings"]
+                self.panel_labels = state["panel_labels"]
+                self.figure_edits = state["figure_edits"]
+                self.log_single_edits = state["log_single_edits"]
+                self._pending_set_curve = state.get("log_curve")
+                if self.files:
+                    self.directory_var.set(str(self.files[0].parent))
+                if self.log_files:
+                    self.log_directory_var.set(str(self.log_files[0].parent))
+                self.notebook.select(0 if state["active"] == "str" else 1)
+                if files[state["active"]]:
+                    self._start_render(state["active"])
+            except (ValueError, KeyError, TypeError, tk.TclError) as exc:
+                messagebox.showerror(self.tr("配置导入失败"), str(exc), parent=self)
+
+        self._queue_file_read(("str", "log"), additions=files, on_complete=restore, strict=True)
+
     def choose_directory(self):
         folder = filedialog.askdirectory(initialdir=self.directory_var.get() or str(Path.home()))
         if folder:
@@ -914,36 +1050,85 @@ class TonyPlotApp(tk.Tk):
             self.log_directory_var.set(folder)
             self.load_log_directory()
 
-    def load_log_directory(self, sync=True):
-        folder = Path(self.log_directory_var.get())
-        if not folder.is_dir():
-            messagebox.showerror(self.tr("目录无效"), str(folder)); return
-        self.log_files = []
-        for path in sorted(folder.glob("*.log")):
+    def _queue_file_read(self, kinds, folder=None, additions=None, on_complete=None, strict=False):
+        """Read paths and headers off the UI thread; apply only the latest result."""
+        tokens = {}
+        for kind in kinds:
+            self.file_load_ids[kind] += 1
+            tokens[kind] = self.file_load_ids[kind]
+            self.file_loading.add(kind)
+            (self.status if kind == "str" else self.log_status).set("正在后台扫描文件和读取字段…")
+        results = queue.Queue()
+
+        def worker():
             try:
-                log_reader.read_header(path)
-                self.log_files.append(path)
-            except (OSError, ValueError):
-                continue
-        self.refresh_log_files()
+                directory = Path(folder).expanduser() if folder else None
+                if additions is None and (directory is None or not directory.is_dir()):
+                    raise ValueError(self.tr("目录无效") + ": " + str(folder or ""))
+                batches = {}
+                for kind in kinds:
+                    paths = sorted(directory.glob(f"*.{kind}")) if additions is None else additions[kind]
+                    paths = list(dict.fromkeys(paths))
+                    headers, invalid = {}, []
+                    for path in paths:
+                        if tokens[kind] != self.file_load_ids[kind]:
+                            break
+                        try:
+                            headers[path] = (engine.list_field_codes(path) if kind == "str"
+                                             else log_reader.read_header(path))
+                        except (OSError, ValueError):
+                            invalid.append(path.name)
+                    batches[kind] = (list(headers), headers, invalid)
+                    if strict and invalid:
+                        raise ValueError("配置引用的数据文件无法读取：\n" + "\n".join(invalid))
+                results.put((batches, None))
+            except Exception as exc:
+                results.put(({}, str(exc)))
+
+        def poll():
+            if not any(tokens[kind] == self.file_load_ids[kind] for kind in kinds):
+                return
+            try:
+                batches, error = results.get_nowait()
+            except queue.Empty:
+                self.after(50, poll)
+                return
+            for kind in kinds:
+                if tokens[kind] != self.file_load_ids[kind]:
+                    continue
+                self.file_loading.discard(kind)
+                if error:
+                    (self.status if kind == "str" else self.log_status).set(error)
+                    continue
+                paths, headers, invalid = batches[kind]
+                if kind == "str":
+                    self.files = paths
+                    self.str_headers = headers
+                    self.refresh_files()
+                else:
+                    self.log_files = paths
+                    self.log_headers = headers
+                    self.refresh_log_files()
+                if additions is not None and invalid:
+                    messagebox.showwarning(self.tr("无法读取的文件"), "\n".join(invalid), parent=self)
+            if error:
+                messagebox.showerror(self.tr("目录无效"), error, parent=self)
+            elif on_complete is not None and all(tokens[kind] == self.file_load_ids[kind] for kind in kinds):
+                on_complete()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(50, poll)
+
+    def load_log_directory(self, sync=True):
+        folder = self.log_directory_var.get().strip()
         if sync:
-            self.directory_var.set(str(folder))
-            self.load_directory(sync=False)
+            self.directory_var.set(folder)
+        self._queue_file_read(("str", "log") if sync else ("log",), folder=folder)
 
     def add_log_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas LOG", "*.log"), ("All files", "*.*")])
-        invalid = []
-        for path in map(Path, paths):
-            try:
-                log_reader.read_header(path)
-                if path not in self.log_files:
-                    self.log_files.append(path)
-            except (OSError, ValueError):
-                invalid.append(path.name)
-        self.refresh_log_files()
-        if invalid:
-            messagebox.showwarning(self.tr("无法绘图的日志"),
-                                   self.tr("这些文件不是 Atlas SSF 数据日志：\n") + "\n".join(invalid))
+        if paths:
+            self._queue_file_read(("log",), additions={"log": [*self.log_files, *map(Path, paths)]})
 
     def remove_log_files(self):
         for index in reversed(self.log_file_list.curselection()):
@@ -951,6 +1136,8 @@ class TonyPlotApp(tk.Tk):
         self.refresh_log_files()
 
     def clear_log_files(self):
+        self.file_load_ids["log"] += 1
+        self.file_loading.discard("log")
         self.log_files.clear()
         self.refresh_log_files()
 
@@ -972,7 +1159,7 @@ class TonyPlotApp(tk.Tk):
             self.log_right_list.delete(0, "end")
             self.log_right_codes = []
             return
-        headers = [log_reader.read_header(path) for path in self.log_files]
+        headers = [self.log_headers[path] for path in self.log_files]
         available = set(headers[0].labels)
         for header in headers[1:]:
             available = {code for code in available if header.labels.get(code) == headers[0].labels[code]}
@@ -1075,20 +1262,15 @@ class TonyPlotApp(tk.Tk):
         }
 
     def load_directory(self, sync=True):
-        folder = Path(self.directory_var.get())
-        if not folder.is_dir():
-            messagebox.showerror(self.tr("目录无效"), str(folder)); return
-        self.files = sorted(folder.glob("*.str"))
-        self.refresh_files()
+        folder = self.directory_var.get().strip()
         if sync:
-            self.log_directory_var.set(str(folder))
-            self.load_log_directory(sync=False)
+            self.log_directory_var.set(folder)
+        self._queue_file_read(("str", "log") if sync else ("str",), folder=folder)
 
     def add_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas STR", "*.str"), ("All files", "*.*")])
-        for path in map(Path, paths):
-            if path not in self.files: self.files.append(path)
-        self.refresh_files()
+        if paths:
+            self._queue_file_read(("str",), additions={"str": [*self.files, *map(Path, paths)]})
 
     def refresh_files(self):
         self.file_list.delete(0, "end")
@@ -1103,9 +1285,9 @@ class TonyPlotApp(tk.Tk):
         if not self.files:
             return
         try:
-            available = set(engine.list_field_codes(self.files[0]))
+            available = set(self.str_headers[self.files[0]])
             for path in self.files[1:]:
-                available.intersection_update(engine.list_field_codes(path))
+                available.intersection_update(self.str_headers[path])
             named = (available & set(FIELD_NAME_BY_CODE)) - DEFAULT_FIELD_CODES
             self.extra_field_codes = [code for code in engine.FIELD_DISPLAY_ORDER if code in named]
             for index, code in enumerate(self.extra_field_codes):
@@ -1202,6 +1384,8 @@ class TonyPlotApp(tk.Tk):
         self.refresh_files()
 
     def clear_files(self):
+        self.file_load_ids["str"] += 1
+        self.file_loading.discard("str")
         self.files.clear(); self.refresh_files()
 
     def clear_extra_fields(self):
@@ -1301,6 +1485,8 @@ class TonyPlotApp(tk.Tk):
         options["field_settings"] = {key: value.copy() for key, value in self.field_settings.items()}
         options["panel_labels"] = copy.deepcopy(self.panel_labels)
         options["files"] = list(self.files)
+        if options.get("materials_only", False):
+            options["quantities"] = ["materials"]
         get = options.__getitem__
         quantities = options["quantities"]
         if not options["files"] or not quantities: raise ValueError("请选择至少一个 .str 文件和一个物理量")
@@ -1320,6 +1506,9 @@ class TonyPlotApp(tk.Tk):
         self._start_render("log")
 
     def _start_render(self, kind):
+        if kind in self.file_loading:
+            (self.status if kind == "str" else self.log_status).set("正在后台扫描文件和读取字段…")
+            return
         if self.busy: return
         try:
             options = self.settings() if kind == "str" else self.settings_log()
@@ -1425,7 +1614,7 @@ class TonyPlotApp(tk.Tk):
             canvas = DeferredFigureCanvasTkAgg(figure, master=plot_area)
             canvas.renderer = renderer
             canvas.blit()
-            toolbar = NavigationToolbar2Tk(canvas, plot_area, pack_toolbar=False)
+            toolbar = CenteredNavigationToolbar2Tk(canvas, plot_area, pack_toolbar=False)
             toolbar.configure(bg=SURFACE, bd=0)
             for tool in toolbar.winfo_children():
                 if isinstance(tool, tk.Button):
@@ -1477,7 +1666,10 @@ class TonyPlotApp(tk.Tk):
         self.log_preview_var.set(labels[0])
         if not self.log_preview_combo.winfo_manager():
             self.log_preview_combo.pack(side="left", padx=10)
-        self._show_log_selection(0, options)
+        index = next((i for i, (code, *_rest) in enumerate(rendered) if code == self._pending_set_curve), 0)
+        self._pending_set_curve = None
+        self.log_preview_combo.current(index)
+        self._show_log_selection(index, options)
 
     def _select_log_preview(self, _event=None):
         index = self.log_preview_combo.current()

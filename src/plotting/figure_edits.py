@@ -108,8 +108,7 @@ def text_artist(figure, key: str, values=None):
 def apply_edits(figure, edits: dict) -> None:
     if "figure_size" in edits:
         figure.set_size_inches(*edits["figure_size"], forward=False)
-        if hasattr(figure, "_tonyplot_export_size"):
-            figure._tonyplot_export_size = tuple(edits["figure_size"])
+        figure._tonyplot_export_size = tuple(edits["figure_size"])
     for key, values in edits.get("texts", {}).items():
         try:
             artist = text_artist(figure, key, values)
@@ -173,6 +172,10 @@ def apply_edits(figure, edits: dict) -> None:
         except (IndexError, KeyError, ValueError):
             continue
     for axis in figure.axes:
+        identity = getattr(axis, "_tonyplot_axis_key", None)
+        if hasattr(axis, "_tonyplot_materials") and identity in edits.get("material_legends", {}):
+            from .material_renderer import apply_material_legend
+            apply_material_legend(axis, edits["material_legends"][identity])
         key = getattr(axis, "_tonyplot_colorbar_key", None)
         if key in edits.get("colorbars", {}):
             apply_colorbar_style(axis, edits["colorbars"][key])

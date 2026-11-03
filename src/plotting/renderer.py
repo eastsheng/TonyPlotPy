@@ -145,6 +145,9 @@ def make_figure(options: dict, cache: dict) -> Figure:
     quantities, bounds, files = options["quantities"], options["bounds"], options["files"]
     structures = [read_structure(path, options, cache) for path in files]
     labels = [engine.snapshot_info(str(path))[1] for path in files]
+    if options.get("materials_only", False):
+        from .material_renderer import make_material_figure
+        return make_material_figure(options, structures, labels)
     panels, columns = panel_layout(options)
     if columns < 1:
         raise ValueError("列数必须至少为 1")
@@ -230,6 +233,8 @@ def make_figure(options: dict, cache: dict) -> Figure:
             for region_id in structure.region_triangles:
                 engine.plot_region(ax, structure, region_id, None, rotated=rotated)
         visibility = options.get("panel_labels", {}).get((str(files[file_index]), quantity), {})
+        if options.get("mesh", False):
+            engine.plot_mesh(ax, structure, rotated=rotated)
         ax.xaxis.label.set_visible(visibility.get("x", True))
         ax.yaxis.label.set_visible(visibility.get("y", True))
         panel_title = labels[file_index]

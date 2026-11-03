@@ -6,6 +6,8 @@ TonyPlotPy is a desktop application for Atlas ASCII `.str` cloud maps and Atlas 
 
 ## Run
 
+**Save set** on either tab saves file order, selected fields/curves, plot parameters, current axis view limits, text/curve/colorbar/arrow edits, and material-legend positions in a TonyPlotPy `.set` file. **Load set** reads the source data in the background and restores the active plot. Data paths are relative where possible; preserve the relative folder layout when moving files. This JSON format does not embed simulation data and is distinct from TonyPlot's native `.set/.setx`. Reproduction requires the original data, fonts, and a compatible software version. Existing double-click editors are also accessible through **Edit this element…** in the right-click menu; active zoom/pan tools retain priority.
+
 ```powershell
 py -m pip install -r requirements.txt
 py tonyplotpy.py
@@ -14,6 +16,14 @@ py tonyplotpy.py
 STR and LOG have separate tabs, file lists, parameters, previews, and export controls. Files are read and figures are generated in a background worker, so the window stays responsive. Use the Matplotlib toolbar to zoom or pan the preview, then export PNG, PDF, or SVG.
 
 ## STR maps
+
+Enable **Materials only (no field map)** to fill regions using the material identifiers in STR `r` records. Matching materials share colors and a legend replaces field colorbars. **Show triangular mesh** independently overlays the original mesh on material or field plots; **Show grid** controls coordinate reference lines.
+
+Material plots also support structure outlines and PN junctions derived from the saved net-doping zero contour. Electrodes are identified from STR electrode names and regions, including the top electrode extent. **Structure labels (material view)** independently toggles electrode names, N/P types, and junction text. Junctions require saved net doping; electrodes outside the visible range are not annotated.
+
+For planar IGBT structures with gate/emitter/collector contacts, semiconductor geometry, depth and doping are used to infer N drift, P-well, N++, N buffer and P+ collector labels. The emitter arrow targets the shallow, heavily doped P-type contact. These are topology-based display inferences rather than stored region names; other device layouts require verification. Buffer and collector labels appear only when their depths are in view.
+
+Structure annotations use arrows without background fills. The material legend defaults to the lower right; double-click it to edit material names/fills, text color, font/size/weight, title, columns, position, and background/border, with preview, cancel, save and undo. Figure-size edits center and fit the preview while retaining the requested physical output size.
 
 Named fields include total/donor/acceptor and ionized doping, potential, electric field magnitude/components, carrier concentrations, quasi-Fermi levels, velocities, mobilities/components, Joule/recombination/total heat power densities, thermal conductivity, specific heat, recombination rates, and ionization coefficients. Only known fields saved in all selected files appear; colorbars include units. Unknown extensions and region-index metadata remain hidden. The metadata in `src/plotting/field_catalog.py` was checked against TonyPlot 5.0.22.R's quantity catalog.
 
@@ -47,7 +57,7 @@ LOG curves use a white background, thin axis lines, inward ticks, and editable t
 
 ## Edit figures
 
-Both tabs support direct editing in the preview. Double-click an axis label or title to edit its text, size, color, and font. Double-click an axis, tick, or spine to edit limits, scales, tick typography and colors, or axis-line colors. Double-click empty figure space to change figure dimensions in inches. Font choices include commonly used paper fonts installed on your computer.
+Both tabs support direct editing in the preview. Double-click an axis label or title to edit its text, size, color, and font. Double-click an axis, tick, or spine to edit limits, scales, tick typography and colors, or axis-line colors. Double-click empty figure space to set an aspect ratio, millimeters, or pixels. Aspect ratio is the default: 10:20 yields 80×160 mm with a configurable 160 mm long edge. Device coordinates remain in µm. Font choices include commonly used paper fonts installed on your computer.
 
 Use **Add arrow** on the preview toolbar and click its start and end points in the same subplot. Set annotation text, font, size, color, and arrow width. Double-click an arrow annotation to edit or delete it. Editing dialogs offer **Preview**; **Cancel** restores the original figure, while **Confirm and close** saves the change for subsequent previews and exports.
 
