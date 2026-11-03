@@ -499,11 +499,16 @@ class FigureEditor:
     def edit_text(self, key, artist):
         window, body = self._dialog("编辑图中文字")
         original = {"text": artist.get_text(), "size": artist.get_fontsize(),
-                    "font_family": artist.get_fontfamily()[0], "color": artist.get_color()}
+                    "font_family": artist.get_fontfamily()[0], "color": artist.get_color(),
+                    "weight": artist.get_fontweight()}
         value = self._entry(body, "内容", original["text"])
         size = self._entry(body, "字号 (pt)", f"{original['size']:g}")
         font_family = self._font_entry(body, original["font_family"])
         color = self._color_entry(body, original["color"])
+        weight = original["weight"]
+        bold = tk.BooleanVar(value=weight in ("bold", "heavy", "black", "semibold", "demibold")
+                             or isinstance(weight, (int, float)) and weight >= 600)
+        ttk.Checkbutton(body, text="加粗", variable=bold).pack(anchor="w", pady=4)
 
         def preview():
             try:
@@ -518,6 +523,7 @@ class FigureEditor:
             artist.set_fontsize(font_size)
             artist.set_fontfamily(font_family.get())
             artist.set_color(text_color)
+            artist.set_fontweight("bold" if bold.get() else "normal")
             self.canvas.draw_idle()
             return True
 
@@ -526,13 +532,19 @@ class FigureEditor:
                 "text": artist.get_text(), "size": artist.get_fontsize(),
                 "color": artist.get_color(),
                 "font_family": font_family.get(),
+                "weight": artist.get_fontweight(),
             }
+            if key != "figure_title":
+                axis = self.figure.axes[int(key.split(":")[1])]
+                if hasattr(axis, "_tonyplot_axis_key"):
+                    self.edits["texts"][key]["axis_key"] = axis._tonyplot_axis_key
 
         def rollback():
             artist.set_text(original["text"])
             artist.set_fontsize(original["size"])
             artist.set_fontfamily(original["font_family"])
             artist.set_color(original["color"])
+            artist.set_fontweight(original["weight"])
             self.canvas.draw_idle()
 
         self._buttons(window, body, preview, commit, rollback)
@@ -610,6 +622,8 @@ class FigureEditor:
                 "x_spine_color": x_spine_color.get(),
                 "y_spine_color": y_spine_color.get(),
             }
+            if hasattr(axis, "_tonyplot_axis_key"):
+                self.edits["axes"][str(index)]["axis_key"] = axis._tonyplot_axis_key
 
         def rollback():
             axis.set_xscale(original["xscale"])

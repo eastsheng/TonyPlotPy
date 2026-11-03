@@ -9,6 +9,7 @@ import threading
 import re
 from pathlib import Path
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 import matplotlib
@@ -27,6 +28,7 @@ from .tooltips import TooltipManager
 from .control_hints import hint_for
 from .version import APP_VERSION
 from .i18n import translate, LocalizedStringVar
+from .view_switcher import ViewSwitcher
 
 
 QUANTITIES = ("electron", "hole", "total", "temperature")
@@ -156,6 +158,7 @@ class TonyPlotApp(tk.Tk):
         self.title(f"TonyPlotPy {APP_VERSION} · " + self.tr("Atlas STR 云图"))
         self.notebook.tab(self.str_page, text=self.tr("  STR 云图  "))
         self.notebook.tab(self.log_page, text=self.tr("  LOG 曲线  "))
+        self.view_switcher.set_labels((self.tr("STR 云图"), self.tr("LOG 曲线")))
         for combo, display, internal, options in self.localized_combos:
             combo.configure(values=[self.tr(item) for item in options])
             display.set(self.tr(internal.get()))
@@ -189,11 +192,15 @@ class TonyPlotApp(tk.Tk):
     def _setup_style(self):
         style = ttk.Style(self)
         style.theme_use("clam")
+        style.layout("View.TNotebook.Tab", [])
+        style.configure("View.TNotebook", borderwidth=0, background=BG)
         font_size = self.preferences["font_size"]
         style.configure("TFrame", background=SURFACE)
         style.configure("Surface.TFrame", background=BG)
         style.configure("TLabel", background=SURFACE, foreground=INK, font=("Segoe UI", font_size))
-        style.configure("TCheckbutton", background=SURFACE, foreground=INK, font=("Segoe UI", font_size))
+        style.configure("Menu.TLabel", font=("Segoe UI", max(9, font_size - 1)))
+        style.configure("Hint.TLabel", foreground=MUTED, font=("Segoe UI", max(8, font_size - 2)))
+        style.configure("TCheckbutton", background=SURFACE, foreground=INK, font=("Segoe UI", max(9, font_size - 1)))
         style.map("TCheckbutton", background=[("active", SURFACE)])
         style.configure("TEntry", fieldbackground=SURFACE, foreground=INK,
                         bordercolor=BORDER, lightcolor=BORDER, padding=5)
@@ -201,6 +208,7 @@ class TonyPlotApp(tk.Tk):
                         background=SURFACE, bordercolor=BORDER, padding=5)
         style.configure("TButton", background=SURFACE, foreground=INK, bordercolor=BORDER,
                         padding=(9, 6), font=("Segoe UI", max(8, font_size - 1)))
+        style.configure("Menu.TButton", padding=(6, 4), font=("Segoe UI", max(8, font_size - 2)))
         style.map("TButton", background=[("active", self.palette["soft"]), ("disabled", BG)])
         style.configure("Accent.TButton", background=ACCENT, foreground=SURFACE,
                         bordercolor=ACCENT, padding=(14, 8), font=("Segoe UI", font_size, "bold"))
@@ -223,21 +231,65 @@ class TonyPlotApp(tk.Tk):
                     widget.configure(highlightbackground=BORDER)
             elif isinstance(widget, tk.Label):
                 widget.configure(bg=SURFACE, fg=INK,
-                                 font=("Segoe UI", font_size, "bold"))
+                                 font=("Segoe UI", font_size + 1, "bold"))
             elif isinstance(widget, tk.Listbox):
                 widget.configure(bg=SURFACE, fg=INK, selectbackground=ACCENT,
-                                 selectforeground=SURFACE, font=("Segoe UI", font_size))
+                                 selectforeground=SURFACE, font=("Segoe UI", max(9, font_size - 1)))
                 if "highlightbackground" in widget.keys():
                     widget.configure(highlightbackground=BORDER)
             elif isinstance(widget, tk.Button):
                 widget.configure(bg=SURFACE, activebackground=self.palette["soft"])
             elif isinstance(widget, (ttk.Entry, ttk.Combobox)):
-                widget.configure(font=("Segoe UI", font_size))
+                widget.configure(font=("Segoe UI", max(9, font_size - 1)))
             for child in widget.winfo_children():
                 update(child)
 
         update(self)
+        def menu_typography(widget):
+            if isinstance(widget, ttk.Button):
+                widget.configure(style="Menu.TButton")
+            elif isinstance(widget, ttk.Label):
+                muted = str(widget.cget("foreground")) == MUTED
+                widget.configure(style="Hint.TLabel" if muted else "Menu.TLabel")
+            if isinstance(widget, (ttk.Label, tk.Label)) and not getattr(widget, "_parameter_caption", False):
+                if not getattr(widget, "_responsive_wrap", False):
+                    def wrap(_event=None, label=widget):
+                        available = label.master.winfo_width()
+                        if available > 40:
+                            label.configure(wraplength=max(40, available - 8))
+                    widget.master.bind("<Configure>", wrap, add="+")
+                    widget._responsive_wrap = True
+                    widget.after_idle(wrap)
+            elif isinstance(widget, ttk.Checkbutton) and not getattr(widget, "_responsive_wrap", False):
+                def wrap_check(_event=None, checkbox=widget):
+                    available = checkbox.master.winfo_width() - 30
+                    if available < 50:
+                        return
+                    source = getattr(checkbox, "_i18n_source", checkbox.cget("text"))
+                    checkbox._i18n_source = source
+                    font = tkfont.Font(self, family="Segoe UI", size=max(9, self.preferences["font_size"] - 1))
+                    lines, line = [], ""
+                    for character in self.tr(source):
+                        if character == "\n" or (line and font.measure(line + character) > available):
+                            lines.append(line)
+                            line = ""
+                        if character != "\n":
+                            line += character
+                    lines.append(line)
+                    text = "\n".join(lines)
+                    if checkbox.cget("text") != text:
+                        checkbox.configure(text=text)
+                    checkbox._i18n_last = text
+                widget.master.bind("<Configure>", wrap_check, add="+")
+                widget.bind("<Configure>", wrap_check, add="+")
+                widget._responsive_wrap = True
+                widget.after_idle(wrap_check)
+            for child in widget.winfo_children():
+                menu_typography(child)
+        menu_typography(self.left_outer)
+        menu_typography(self.log_left_outer)
         self.configure(bg=BG)
+        self.view_switcher.configure_theme(self.palette, font_size, BG)
         self.left_scroll.configure(bg=BG)
         self.log_left_scroll.configure(bg=BG)
         for label in self.header_title_labels:
@@ -331,17 +383,15 @@ class TonyPlotApp(tk.Tk):
     def _entry(self, parent, label, key, default, width=11):
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=2)
-        caption = ttk.Label(row, text=label, width=18)
-        caption.pack(side="left")
+        caption = ttk.Label(row, text=label, style="Menu.TLabel")
         entry = ttk.Entry(row, textvariable=self.var(key, default), width=width)
-        entry.pack(side="left", fill="x", expand=True)
+        self._layout_parameter_row(row, caption, entry)
         self.control_hints.extend(((caption, hint_for(key, label)), (entry, hint_for(key, label))))
 
     def _combo(self, parent, label, key, default, options):
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=2)
-        caption = ttk.Label(row, text=label, width=18)
-        caption.pack(side="left")
+        caption = ttk.Label(row, text=label, style="Menu.TLabel")
         internal = self.var(key, default)
         display = tk.StringVar(value=self.tr(default))
         combo = ttk.Combobox(row, textvariable=display,
@@ -354,26 +404,91 @@ class TonyPlotApp(tk.Tk):
         combo.bind("<<ComboboxSelected>>", chosen, add="+")
         internal.trace_add("write", synced)
         self.localized_combos.append((combo, display, internal, tuple(options)))
-        combo.pack(side="left", fill="x", expand=True)
+        self._layout_parameter_row(row, caption, combo)
         self.control_hints.extend(((caption, hint_for(key, label)), (combo, hint_for(key, label))))
+
+    @staticmethod
+    def _layout_parameter_row(row, caption, control):
+        """Use full-width inputs in narrow menus and two columns when widened."""
+        caption._parameter_caption = True
+        def arrange(event=None):
+            width = event.width if event is not None else row.winfo_width()
+            if getattr(row, "_layout_width", None) == width:
+                return
+            row._layout_width = width
+            caption.grid_forget()
+            control.grid_forget()
+            if width >= 380:
+                row.columnconfigure(0, weight=1, uniform="parameter")
+                row.columnconfigure(1, weight=1, uniform="parameter")
+                caption.configure(wraplength=max(60, width // 2 - 12))
+                caption.grid(row=0, column=0, sticky="w", padx=(0, 10))
+                control.grid(row=0, column=1, sticky="ew")
+            else:
+                row.columnconfigure(0, weight=1, uniform="")
+                row.columnconfigure(1, weight=0, uniform="")
+                caption.configure(wraplength=max(80, width - 8))
+                caption.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
+                control.grid(row=1, column=0, columnspan=2, sticky="ew")
+        row.bind("<Configure>", arrange)
+        arrange()
 
     def _check(self, parent, label, key, default):
         checkbox = ttk.Checkbutton(parent, text=label, variable=self.var(key, default))
         checkbox.pack(anchor="w", pady=2)
         self.control_hints.append((checkbox, hint_for(key, label)))
 
-    def _section(self, parent, title):
+    @staticmethod
+    def _horizontal_list_scroll(parent, listing):
+        scrollbar = ttk.Scrollbar(parent, orient="horizontal", command=listing.xview)
+        scrollbar.pack(fill="x", pady=(0, 2))
+        listing.configure(xscrollcommand=scrollbar.set)
+
+    @staticmethod
+    def _wrap_buttons(row, buttons):
+        """Wrap action buttons instead of letting packed siblings be clipped."""
+        def arrange(_event=None):
+            width = row.winfo_width()
+            minimum = max(button.winfo_reqwidth() for button in buttons) + 4
+            columns = max(1, min(len(buttons), width // minimum))
+            if getattr(row, "_button_columns", None) == columns:
+                return
+            row._button_columns = columns
+            for index in range(len(buttons)):
+                row.columnconfigure(index, weight=1 if index < columns else 0,
+                                    uniform="actions" if index < columns else "")
+            for index, button in enumerate(buttons):
+                button.grid(row=index // columns, column=index % columns,
+                            sticky="ew", padx=2, pady=2)
+        row.bind("<Configure>", arrange, add="+")
+        for button in buttons:
+            button.bind("<Configure>", arrange, add="+")
+        row.after_idle(arrange)
+
+    def _section(self, parent, title, hint=None):
         card = tk.Frame(parent, bg=SURFACE, highlightbackground=BORDER,
                         highlightthickness=1, bd=0)
         card.pack(fill="x", padx=10, pady=7)
-        tk.Label(card, text=title, bg=SURFACE, fg=INK,
-                 font=("Segoe UI", self.preferences["font_size"], "bold"), anchor="w").pack(fill="x", padx=12, pady=(12, 6))
+        heading = tk.Label(card, text=title, bg=SURFACE, fg=INK,
+                           font=("Segoe UI", self.preferences["font_size"], "bold"), anchor="w")
+        heading.pack(fill="x", padx=12, pady=(12, 6))
+        if hint:
+            self.control_hints.append((heading, hint))
         frame = ttk.Frame(card, padding=(12, 0, 12, 12))
         frame.pack(fill="x")
         return frame
 
     def _build_ui(self):
-        self.notebook = ttk.Notebook(self)
+        navigation = ttk.Frame(self, height=44, style="Surface.TFrame")
+        self.navigation = navigation
+        navigation.pack(fill="x")
+        navigation.pack_propagate(False)
+        self.view_switcher = ViewSwitcher(navigation, lambda index: self.notebook.select(index))
+        self.view_switcher.place(x=10, y=6)
+        self.notebook = ttk.Notebook(self, style="View.TNotebook")
+        self.notebook.bind("<<NotebookTabChanged>>",
+                           lambda _event: self.view_switcher.select(self.notebook.index(self.notebook.select())))
+        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.after_idle(self._align_view_switcher), add="+")
         self.notebook.pack(fill="both", expand=True)
         str_page = ttk.Frame(self.notebook)
         log_page = ttk.Frame(self.notebook)
@@ -413,7 +528,7 @@ class TonyPlotApp(tk.Tk):
         self.left_scroll = scroll
         self.left_outer = left_outer
 
-        files = self._section(controls, "数据文件（列表顺序即组合图顺序）")
+        files = self._section(controls, "数据文件", "列表顺序即组合图顺序。")
         self.directory_var = tk.StringVar()
         self.directory_entry = ttk.Entry(files, textvariable=self.directory_var)
         self.directory_entry.pack(fill="x")
@@ -427,8 +542,10 @@ class TonyPlotApp(tk.Tk):
                                     highlightthickness=1, highlightbackground=BORDER)
         self.file_list.pack(fill="x")
         row = ttk.Frame(files); row.pack(fill="x", pady=4)
+        buttons = []
         for label, action in (("移除", self.remove_files), ("上移", lambda: self.move_file(-1)), ("下移", lambda: self.move_file(1)), ("清空", self.clear_files)):
-            ttk.Button(row, text=label, command=action).pack(side="left")
+            buttons.append(ttk.Button(row, text=label, command=action, style="Menu.TButton"))
+        self._wrap_buttons(row, buttons)
         ttk.Button(files, text="仅保留选中项", command=self.keep_selected).pack(fill="x")
 
         view = self._section(controls, "视图与组合")
@@ -459,6 +576,7 @@ class TonyPlotApp(tk.Tk):
         field_scroll = ttk.Scrollbar(field_frame, orient="vertical", command=self.field_list.yview)
         field_scroll.pack(side="right", fill="y")
         self.field_list.configure(yscrollcommand=field_scroll.set)
+        self._horizontal_list_scroll(view, self.field_list)
         field_actions = ttk.Frame(view)
         field_actions.pack(fill="x", pady=(4, 0))
         ttk.Button(field_actions, text="清除字段选择", command=self.clear_extra_fields).pack(side="left")
@@ -506,11 +624,23 @@ class TonyPlotApp(tk.Tk):
         self.bind_class("LeftSettingsScroll", "<MouseWheel>", self._scroll_left)
         self._install_scroll_tag(left_outer)
         self._build_log_ui(log_page)
+        for menu in (self.left_outer, self.log_left_outer):
+            menu.bind("<Configure>", lambda _event: self.after_idle(self._align_view_switcher), add="+")
+        self.after_idle(self._align_view_switcher)
+
+    def _align_view_switcher(self):
+        if not hasattr(self, "log_plot_area"):
+            return
+        menu = self.log_left_outer if self._active_kind() == "log" else self.left_outer
+        self.view_switcher.place_configure(x=menu.winfo_rootx() - self.navigation.winfo_rootx() + 10)
+        self.navigation.configure(height=int(self.view_switcher.cget("height")) + 12)
 
     def _register_tooltips(self):
         for widget, hint in self.control_hints:
             self.tooltips.register(widget, hint)
-        self.tooltips.register(self.notebook, self._notebook_hint)
+        self.tooltips.register(self.view_switcher, lambda event:
+                               "STR：二维物理场云图。" if event.x < self.view_switcher.winfo_width() / 2
+                               else "LOG：曲线图和双 Y 轴。")
         for paned in (self.str_paned, self.log_paned):
             self.tooltips.register(paned, "拖动中间分隔线可调整参数区和预览区的宽度。")
         self.tooltips.register(self.status_label, lambda _event: self.status.get())
@@ -694,6 +824,7 @@ class TonyPlotApp(tk.Tk):
         y_scroll = ttk.Scrollbar(y_frame, orient="vertical", command=self.log_y_list.yview)
         y_scroll.pack(side="right", fill="y")
         self.log_y_list.configure(yscrollcommand=y_scroll.set)
+        self._horizontal_list_scroll(signals, self.log_y_list)
         self.log_y_list.bind("<<ListboxSelect>>", self._refresh_right_axis_choices)
         ttk.Button(signals, text="清除曲线选择", command=self._clear_log_y_selection).pack(anchor="w", pady=4)
         self._combo(signals, "绘图方式", "log_layout", "每信号子图",
@@ -706,6 +837,7 @@ class TonyPlotApp(tk.Tk):
                                          exportselection=False, bg=SURFACE, fg=INK,
                                          selectbackground=ACCENT, selectforeground=SURFACE)
         self.log_right_list.pack(fill="x")
+        self._horizontal_list_scroll(self.log_dual_frame, self.log_right_list)
         self._combo(self.log_dual_frame, "右轴标度", "log_right_y_scale", "linear", ("linear", "log"))
         self._entry(self.log_dual_frame, "右轴最小（空=自动）", "log_right_y_min", "")
         self._entry(self.log_dual_frame, "右轴最大（空=自动）", "log_right_y_max", "")
@@ -782,7 +914,7 @@ class TonyPlotApp(tk.Tk):
             self.log_directory_var.set(folder)
             self.load_log_directory()
 
-    def load_log_directory(self):
+    def load_log_directory(self, sync=True):
         folder = Path(self.log_directory_var.get())
         if not folder.is_dir():
             messagebox.showerror(self.tr("目录无效"), str(folder)); return
@@ -794,6 +926,9 @@ class TonyPlotApp(tk.Tk):
             except (OSError, ValueError):
                 continue
         self.refresh_log_files()
+        if sync:
+            self.directory_var.set(str(folder))
+            self.load_directory(sync=False)
 
     def add_log_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas LOG", "*.log"), ("All files", "*.*")])
@@ -939,12 +1074,15 @@ class TonyPlotApp(tk.Tk):
             "right_y_min": get("log_right_y_min"), "right_y_max": get("log_right_y_max"),
         }
 
-    def load_directory(self):
+    def load_directory(self, sync=True):
         folder = Path(self.directory_var.get())
         if not folder.is_dir():
             messagebox.showerror(self.tr("目录无效"), str(folder)); return
         self.files = sorted(folder.glob("*.str"))
         self.refresh_files()
+        if sync:
+            self.log_directory_var.set(str(folder))
+            self.load_log_directory(sync=False)
 
     def add_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas STR", "*.str"), ("All files", "*.*")])
@@ -1007,16 +1145,22 @@ class TonyPlotApp(tk.Tk):
         edits = {}
         body = ttk.Frame(dialog, padding=16)
         body.pack(fill="both", expand=True)
-        for label, key, choices in (
+        is_doping = field in ("code:115", "net_doping")
+        controls = [
             ("色图", "cmap", ("默认", *engine.COLOR_PRESETS)),
-            ("标度", "scale", ("默认", "linear", "log")),
+            ("标度", "scale", ("默认", "linear", "log", "symlog") if is_doping else ("默认", "linear", "log")),
             ("下限", "vmin", None),
             ("上限", "vmax", None),
             ("等值带数", "bands", None),
-        ):
+        ]
+        if is_doping:
+            controls.extend((("净掺杂显示", "doping_mode", ("absolute", "signed")),
+                             ("对数阈值", "doping_floor", None)))
+        for label, key, choices in controls:
             row = ttk.Frame(body); row.pack(fill="x", pady=4)
             ttk.Label(row, text=self.tr(label), width=10).pack(side="left")
-            variable = tk.StringVar(value=self.tr(values.get(key, "默认" if choices else "")))
+            default = "absolute" if key == "doping_mode" else ("默认" if choices else "")
+            variable = tk.StringVar(value=self.tr(values.get(key, default)))
             edits[key] = variable
             if choices:
                 ttk.Combobox(row, textvariable=variable, values=[self.tr(item) for item in choices],
@@ -1030,6 +1174,8 @@ class TonyPlotApp(tk.Tk):
             data = {key: ("默认" if var.get() == self.tr("默认") else var.get().strip())
                     for key, var in edits.items()}
             try:
+                if is_doping and data["doping_floor"] and float(data["doping_floor"]) <= 0:
+                    raise ValueError("净掺杂对数阈值必须大于 0")
                 lower = optional_float(data["vmin"])
                 upper = optional_float(data["vmax"])
                 if lower is not None and upper is not None and upper <= lower:

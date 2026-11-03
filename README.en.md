@@ -1,6 +1,6 @@
 # TonyPlotPy
 
-**Language: [中文（默认）](README.md) | English** · Version 0.4.0 · [MIT License](LICENSE)
+**Language: [中文（默认）](README.md) | English** · Version v0.4.1 · [MIT License](LICENSE)
 
 TonyPlotPy is a desktop application for Atlas ASCII `.str` cloud maps and Atlas SSF `.log` curves. The STR workflow builds on `plot_switching_str_cloud_maps_on.py` and supports mesh parsing, field mapping validation, cell mirroring, structure overlays, TonyPlot colormaps, and three rendering methods.
 
@@ -14,6 +14,12 @@ py tonyplotpy.py
 STR and LOG have separate tabs, file lists, parameters, previews, and export controls. Files are read and figures are generated in a background worker, so the window stays responsive. Use the Matplotlib toolbar to zoom or pan the preview, then export PNG, PDF, or SVG.
 
 ## STR maps
+
+Named fields include total/donor/acceptor and ionized doping, potential, electric field magnitude/components, carrier concentrations, quasi-Fermi levels, velocities, mobilities/components, Joule/recombination/total heat power densities, thermal conductivity, specific heat, recombination rates, and ionization coefficients. Only known fields saved in all selected files appear; colorbars include units. Unknown extensions and region-index metadata remain hidden. The metadata in `src/plotting/field_catalog.py` was checked against TonyPlot 5.0.22.R's quantity catalog.
+
+Net doping defaults to absolute values with logarithmic colors, a 1e12 cm⁻³ lower limit, and an upper limit rounded up to the next decade from the visible maximum magnitude. Current limits and percentile clipping do not apply. Double-click the field to select signed values (symlog by default), set limits/scale, and adjust the log threshold (blank: 1e12 cm⁻³). This threshold is the default lower limit for absolute log mode and the linear-region threshold for symlog. The `tonyplot_user_smooth` palette is approximate; exact color matching requires the same reference palette, display mode, and limits.
+
+Cloud maps use triangles and stored nodal values from every material region, including electrode, gate, and emitter regions. Structure overlays draw boundaries without covering the physical field with fixed material colors. Automatic color limits include all regions.
 
 Panel titles show only time or file labels by default. Quantity names remain on the colorbars. Enable **Show quantity in panel titles** to include quantity names in panel titles as well.
 

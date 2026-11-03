@@ -6,7 +6,7 @@ from pathlib import Path
 
 import matplotlib.tri as mtri
 import numpy as np
-from matplotlib.colors import LogNorm, Normalize
+from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 from matplotlib.figure import Figure
 from matplotlib.transforms import Bbox
 
@@ -55,6 +55,46 @@ def read_structure(path: Path, options: dict, cache: dict) -> engine.Structure:
 def field_norm(structures: list[engine.Structure], quantity: str, bounds: tuple,
                overrides: dict):
     """Use the field's shared auto range, then apply its optional overrides."""
+    if quantity in ("code:115", "net_doping"):
+        x0, x1, y0, y1 = bounds
+        arrays = []
+        for structure in structures:
+            nodes = np.unique(structure.triangles)
+            inside = ((structure.x[nodes] >= x0) & (structure.x[nodes] <= x1)
+                      & (structure.y[nodes] >= y0) & (structure.y[nodes] <= y1))
+            data = structure.values[quantity][nodes[inside]]
+            arrays.append(data[np.isfinite(data)])
+        data = np.concatenate(arrays)
+        if not data.size:
+            raise ValueError("净掺杂：当前视野没有有效节点")
+        absolute = overrides.get("doping_mode", "absolute") == "absolute"
+        scale = overrides.get("scale", "默认")
+        if scale == "默认":
+            scale = "log" if absolute else "symlog"
+        if absolute:
+            data = np.abs(data)
+        lower = optional_float(overrides.get("vmin", ""))
+        upper = optional_float(overrides.get("vmax", ""))
+        floor = optional_float(overrides.get("doping_floor", ""))
+        floor = 1e12 if floor is None else floor
+        if floor <= 0:
+            raise ValueError("净掺杂对数阈值必须大于 0")
+        if scale == "log":
+            if not absolute:
+                raise ValueError("带符号净掺杂请使用 symlog 或 linear 标度")
+            lower = floor if lower is None else lower
+            maximum = max(float(np.max(data)), lower * 10)
+            upper = 10 ** math.ceil(math.log10(maximum)) if upper is None else upper
+            if lower <= 0 or upper <= lower:
+                raise ValueError("对数色标需要 0 < 下限 < 上限")
+            return LogNorm(lower, upper, clip=True)
+        extent = max(float(np.max(np.abs(data))), floor)
+        lower = (0 if absolute else -extent) if lower is None else lower
+        upper = extent if upper is None else upper
+        if upper <= lower:
+            raise ValueError("上限必须大于下限")
+        return (SymLogNorm(floor, vmin=lower, vmax=upper, clip=True)
+                if scale == "symlog" else Normalize(lower, upper, clip=True))
     base = engine.color_norm(structures, quantity, bounds)
     if not overrides:
         return base
@@ -138,6 +178,7 @@ def make_figure(options: dict, cache: dict) -> Figure:
     x0, x1, y0, y1 = bounds
     for index, (file_index, quantity) in enumerate(panels):
         ax = axes.flat[index]
+        ax._tonyplot_axis_key = ("str", str(files[file_index]), quantity)
         structure = structures[file_index]
         if rotated:
             tri = mtri.Triangulation(structure.y, structure.x, structure.triangles)
@@ -160,7 +201,10 @@ def make_figure(options: dict, cache: dict) -> Figure:
                 engine.TEMPERATURE_CONTOUR_BANDS = int(options["temp_bands"])
             else:
                 engine.CURRENT_CONTOUR_BANDS = int(options["current_bands"])
-        image = engine.draw_field(ax, tri, structure.values[quantity], quantity, cmap, norms[quantity])
+        values = structure.values[quantity]
+        if quantity in ("code:115", "net_doping") and field_options.get("doping_mode", "absolute") == "absolute":
+            values = np.abs(values)
+        image = engine.draw_field(ax, tri, values, quantity, cmap, norms[quantity])
         group_key = "shared_current" if quantity in shared_currents else quantity
         group = colorbar_groups.setdefault(group_key, {"axes": [], "image": None})
         group["axes"].append(ax)
@@ -183,11 +227,8 @@ def make_figure(options: dict, cache: dict) -> Figure:
                                   colors="white", linewidths=0.7, linestyles="--", zorder=3)
             except ValueError:
                 pass
-            engine.plot_region(ax, structure, 2, "#a9cce3", rotated=rotated)
-            for electrode, color in (("gate", "#d990ba"), ("emitter", "#f0af65")):
-                if electrode in structure.electrodes:
-                    engine.plot_region(ax, structure, structure.electrodes[electrode], color,
-                                       rotated=rotated)
+            for region_id in structure.region_triangles:
+                engine.plot_region(ax, structure, region_id, None, rotated=rotated)
         visibility = options.get("panel_labels", {}).get((str(files[file_index]), quantity), {})
         ax.xaxis.label.set_visible(visibility.get("x", True))
         ax.yaxis.label.set_visible(visibility.get("y", True))
@@ -215,6 +256,8 @@ def make_figure(options: dict, cache: dict) -> Figure:
         colorbar = engine.add_colorbar(
             figure, group["image"], ax=group["axes"],
             label=(r"Current density $|J|$ (A/cm$^2$)" if quantity == "shared_current"
+                   else (r"Absolute net doping (cm$^{-3}$)" if field_settings.get(quantity, {}).get("doping_mode", "absolute") == "absolute"
+                         else r"Net doping (cm$^{-3}$)") if quantity in ("code:115", "net_doping")
                    else quantity_label(quantity)),
             shrink=shrink, pad=0.025,
         )
@@ -231,7 +274,10 @@ def make_figure(options: dict, cache: dict) -> Figure:
 
             colorbar.ax.set_axes_locator(compact_locator)
         colorbar.ax.tick_params(labelsize=8, colors="#52687a")
+        if quantity.startswith("code:"):
+            colorbar.ax.yaxis.label.set_fontfamily("DejaVu Sans")
         colorbar.ax._tonyplot_colorbar_key = quantity
+        colorbar.ax._tonyplot_axis_key = ("colorbar", quantity)
         colorbar.outline.set_edgecolor("#b8cbd8")
     figure.suptitle(files[0].parent.name, fontsize=12, color="#183b56")
     return figure

@@ -9,6 +9,7 @@ import numpy as np
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import LinearSegmentedColormap, LogNorm, Normalize
 from matplotlib.cm import ScalarMappable
+from .field_catalog import FIELDS as ADDITIONAL_FIELDS, DISPLAY_ORDER as ADDITIONAL_ORDER
 
 
 # Renderer defaults. The desktop interface supplies data paths and plot settings.
@@ -99,6 +100,11 @@ FIELD_UI_LABELS_BY_CODE = {
 
 FIELD_DISPLAY_ORDER = (115, 108, 524, 525, 211, 220, 224,
                        210, 221, 225, 215, 222, 226, 124)
+FIELD_LABELS_BY_CODE.update({code: f"{name} ({unit})" if unit else name
+                             for code, (_chinese, name, unit) in ADDITIONAL_FIELDS.items()})
+FIELD_UI_LABELS_BY_CODE.update({code: chinese for code, (chinese, _name, _unit)
+                                in ADDITIONAL_FIELDS.items()})
+FIELD_DISPLAY_ORDER = (115, *ADDITIONAL_ORDER, *FIELD_DISPLAY_ORDER[1:])
 
 LABELS = {
     "electron": r"Electron current density $|J_e|$ (A/cm$^2$)",
@@ -208,7 +214,8 @@ def read_structure(path: Path) -> Structure:
         [[id_to_index[node_id] for node_id in triangle] for triangle in triangles_by_node],
         dtype=int,
     )
-    # 仅显示 region 1 的 4H-SiC；氧化层和金属中这些电流量没有相同物理意义。
+    # Retain every material region for field rendering. Region 1 is used only
+    # for the original current-component consistency check below.
     region_ids = np.array(triangle_regions, dtype=int)
     region_triangles = {
         region_id: triangles[region_ids == region_id]
@@ -236,7 +243,7 @@ def read_structure(path: Path) -> Structure:
             )
 
     return Structure(
-        x=xy[:, 0], y=xy[:, 1], triangles=silicon_carbide,
+        x=xy[:, 0], y=xy[:, 1], triangles=triangles,
         region_triangles=region_triangles, electrodes=electrodes, values=values,
         field_codes=tuple(codes),
     )
@@ -282,17 +289,18 @@ def mirror_structure(structure: Structure, axis_x: float) -> Structure:
     )
 
 
-def plot_region(ax, structure: Structure, region_id: int, color: str,
+def plot_region(ax, structure: Structure, region_id: int, color: str | None,
                 rotated: bool = True) -> None:
     """按 .str 原始三角形填充材料，并画出该区域的外轮廓。"""
     triangles = structure.region_triangles.get(region_id)
     if triangles is None or triangles.size == 0:
         return
     xy = np.column_stack((structure.y, structure.x)) if rotated else np.column_stack((structure.x, structure.y))
-    ax.add_collection(PolyCollection(
-        xy[triangles], facecolor=color, edgecolor="none",
-        linewidth=0, antialiased=False, zorder=2,
-    ))
+    if color is not None:
+        ax.add_collection(PolyCollection(
+            xy[triangles], facecolor=color, edgecolor="none",
+            linewidth=0, antialiased=False, zorder=2,
+        ))
     edges = np.sort(
         np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]])),
         axis=1,
@@ -362,11 +370,7 @@ def draw_field(ax, triangulation, values, quantity, cmap, norm):
             cmap=cmap, norm=norm, rasterized=True,
         )
         if RENDER_STYLE == "smooth_contours":
-            levels = (
-                np.geomspace(norm.vmin, norm.vmax, GUIDE_CONTOUR_LINES + 2)[1:-1]
-                if isinstance(norm, LogNorm)
-                else np.linspace(norm.vmin, norm.vmax, GUIDE_CONTOUR_LINES + 2)[1:-1]
-            )
+            levels = norm.inverse(np.linspace(0, 1, GUIDE_CONTOUR_LINES + 2))[1:-1]
             levels = levels[(levels > np.min(plot_values)) & (levels < np.max(plot_values))]
             if levels.size:
                 ax.tricontour(triangulation, plot_values, levels=levels,
@@ -377,11 +381,7 @@ def draw_field(ax, triangulation, values, quantity, cmap, norm):
     bands = TEMPERATURE_CONTOUR_BANDS if quantity == "temperature" else CURRENT_CONTOUR_BANDS
     if bands < 2:
         raise ValueError("等值带数量必须不少于 2")
-    levels = (
-        np.geomspace(norm.vmin, norm.vmax, bands + 1)
-        if isinstance(norm, LogNorm)
-        else np.linspace(norm.vmin, norm.vmax, bands + 1)
-    )
+    levels = norm.inverse(np.linspace(0, 1, bands + 1))
     # 使用 extend 着色超出色标的区域；直接截成 vmax 会让最高值平台留下白块。
     return ax.tricontourf(
         triangulation, plot_values, levels=levels,

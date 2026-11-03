@@ -7,6 +7,11 @@ from .control_hints import HINTS
 
 
 ENGLISH = {
+    "数据文件": "Data files",
+    "列表顺序即组合图顺序。": "The file list order determines the panel order in combined figures.",
+    "STR 云图": "STR maps",
+    "净掺杂显示": "Net doping mode", "对数阈值": "Log threshold",
+    "加粗": "Bold",
     "撤销": "Undo",
     "撤销上一次已确认的图形编辑（Ctrl+Z），最多保留 50 步。": "Undo the last confirmed figure edit (Ctrl+Z); up to 50 steps are retained.",
     "编辑色棒": "Edit colorbar", "色棒长度 (英寸)": "Bar length (in)",

@@ -83,11 +83,23 @@ def refresh_legend(axis) -> None:
         text.set_fontfamily(getattr(line, "_tonyplot_legend_font_family", "Arial"))
 
 
-def text_artist(figure, key: str):
+def edited_axis(figure, index, values):
+    identity = values.get("axis_key")
+    if identity is not None:
+        return next((axis for axis in figure.axes
+                     if getattr(axis, "_tonyplot_axis_key", None) == tuple(identity)), None)
+    axis = figure.axes[int(index)]
+    # Legacy numeric panel edits must never overwrite a colorbar's field label.
+    return None if hasattr(axis, "_tonyplot_colorbar_key") else axis
+
+
+def text_artist(figure, key: str, values=None):
     if key == "figure_title":
         return figure._suptitle or figure.suptitle("")
     _, index, role = key.split(":", 2)
-    axis = figure.axes[int(index)]
+    axis = edited_axis(figure, index, values or {})
+    if axis is None:
+        return None
     return {"xlabel": axis.xaxis.label, "ylabel": axis.yaxis.label,
             "title": axis.title, "left_title": axis._left_title,
             "right_title": axis._right_title}[role]
@@ -100,7 +112,7 @@ def apply_edits(figure, edits: dict) -> None:
             figure._tonyplot_export_size = tuple(edits["figure_size"])
     for key, values in edits.get("texts", {}).items():
         try:
-            artist = text_artist(figure, key)
+            artist = text_artist(figure, key, values)
         except (IndexError, KeyError, ValueError):
             continue
         if artist is not None:
@@ -110,10 +122,14 @@ def apply_edits(figure, edits: dict) -> None:
                 artist.set_color(values["color"])
             if "font_family" in values:
                 artist.set_fontfamily(values["font_family"])
+            if "weight" in values:
+                artist.set_fontweight(values["weight"])
     for index_text, values in edits.get("axes", {}).items():
         try:
-            axis = figure.axes[int(index_text)]
+            axis = edited_axis(figure, index_text, values)
         except (IndexError, ValueError):
+            continue
+        if axis is None:
             continue
         axis.set_xscale(values["xscale"])
         axis.set_yscale(values["yscale"])
