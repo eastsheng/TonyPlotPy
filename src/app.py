@@ -19,8 +19,10 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 
 from .plotting import atlas_engine as engine
 from .plotting import renderer
+from .plotting.axis_breaks import parse_breaks
 from .plotting import log_reader, log_renderer
 from .plotting.figure_edits import apply_edits
+from .plotting.export_diagnostics import quiet_export
 from .figure_editor import FigureEditor
 from .deferred_canvas import DeferredFigureCanvasTkAgg, CenteredNavigationToolbar2Tk
 from .ui_settings import THEMES, WINDOW_SIZES, load_settings, save_settings
@@ -30,6 +32,7 @@ from .version import APP_VERSION
 from .i18n import translate, LocalizedStringVar
 from .view_switcher import ViewSwitcher
 from .plot_config import save_config, load_config
+from .str_animation import render_frames, build_animation_panel, save_animation
 
 
 QUANTITIES = ("electron", "hole", "total", "temperature")
@@ -93,7 +96,7 @@ class TonyPlotApp(tk.Tk):
             q: tk.BooleanVar(value=q in ("total", "temperature"))
             for q in QUANTITIES
         }
-        self.extra_field_codes: list[int] = []
+        self.extra_field_codes: list[int | str] = []
         self.field_settings: dict[str, dict[str, str]] = {}
         self.panel_labels = {}
         self.control_hints = []
@@ -164,7 +167,12 @@ class TonyPlotApp(tk.Tk):
         self.title(f"TonyPlotPy {APP_VERSION} · " + self.tr("Atlas STR 云图"))
         self.notebook.tab(self.str_page, text=self.tr("  STR 云图  "))
         self.notebook.tab(self.log_page, text=self.tr("  LOG 曲线  "))
-        self.view_switcher.set_labels((self.tr("STR 云图"), self.tr("LOG 曲线")))
+        self.notebook.tab(self.animation_page, text=self.tr("动态云图"))
+        self.view_switcher.set_labels((self.tr("STR 云图"), self.tr("动态云图"), self.tr("LOG 曲线")))
+        self.edit_menu.entryconfigure(0, label=self.tr("设置…"))
+        for index, label in enumerate(("选择目录", "加载目录", "添加文件")):
+            self.file_menu.entryconfigure(index, label=self.tr(label))
+        self.file_menu.entryconfigure(4, label=self.tr("保存为图片…"))
         for combo, display, internal, options in self.localized_combos:
             combo.configure(values=[self.tr(item) for item in options])
             display.set(self.tr(internal.get()))
@@ -203,9 +211,24 @@ class TonyPlotApp(tk.Tk):
         font_size = self.preferences["font_size"]
         style.configure("TFrame", background=SURFACE)
         style.configure("Surface.TFrame", background=BG)
+        style.layout("TopMenu.TMenubutton", [
+            ("Menubutton.border", {"sticky": "nsew", "children": [
+                ("Menubutton.padding", {"sticky": "nsew", "children": [
+                    ("Menubutton.label", {"sticky": "nsew"}),
+                ]}),
+            ]}),
+        ])
+        style.configure("TopMenu.TMenubutton", background=BG, foreground=INK,
+                        borderwidth=0, relief="flat", padding=(7, 4),
+                        font=("Segoe UI", max(9, font_size - 1)))
+        style.map("TopMenu.TMenubutton",
+                  background=[("pressed", self.palette["tab_hover"]), ("active", self.palette["soft"])],
+                  foreground=[("pressed", ACCENT), ("active", ACCENT)])
         style.configure("TLabel", background=SURFACE, foreground=INK, font=("Segoe UI", font_size))
         style.configure("Menu.TLabel", font=("Segoe UI", max(9, font_size - 1)))
         style.configure("Hint.TLabel", foreground=MUTED, font=("Segoe UI", max(8, font_size - 2)))
+        style.configure("Footer.TLabel", background=BG, foreground=MUTED,
+                        font=("Segoe UI", max(8, font_size - 2)))
         style.configure("TCheckbutton", background=SURFACE, foreground=INK, font=("Segoe UI", max(9, font_size - 1)))
         style.map("TCheckbutton", background=[("active", SURFACE)])
         style.configure("TEntry", fieldbackground=SURFACE, foreground=INK,
@@ -370,6 +393,7 @@ class TonyPlotApp(tk.Tk):
             if values["window_size"] != old_window_size:
                 self.geometry(WINDOW_SIZES[values["window_size"]])
             dialog.destroy()
+            self._notify_saved("软件设置已保存")
 
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(14, 0))
@@ -485,31 +509,53 @@ class TonyPlotApp(tk.Tk):
         return frame
 
     def _build_ui(self):
+        menu_bar = ttk.Frame(self, padding=(4, 2), style="Surface.TFrame")
+        menu_bar.pack(fill="x")
         navigation = ttk.Frame(self, height=44, style="Surface.TFrame")
         self.navigation = navigation
         navigation.pack(fill="x")
         navigation.pack_propagate(False)
+        file_button = ttk.Menubutton(menu_bar, text="文件", style="TopMenu.TMenubutton")
+        file_button.pack(side="left")
+        edit_button = ttk.Menubutton(menu_bar, text="编辑", style="TopMenu.TMenubutton")
+        edit_button.pack(side="left")
+        self.edit_menu = tk.Menu(edit_button, tearoff=False)
+        self.edit_menu.add_command(label="设置…", command=self.open_settings)
+        edit_button.configure(menu=self.edit_menu)
+        self.file_menu = tk.Menu(file_button, tearoff=False)
+        for label, action in (("选择目录", "choose"), ("加载目录", "load"), ("添加文件", "add")):
+            self.file_menu.add_command(label=label, command=lambda action=action: self._file_menu_action(action))
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="保存为图片…", command=self.export)
+        file_button.configure(menu=self.file_menu)
         self.view_switcher = ViewSwitcher(navigation, lambda index: self.notebook.select(index))
         self.view_switcher.place(x=10, y=6)
         self.notebook = ttk.Notebook(self, style="View.TNotebook")
         self.notebook.bind("<<NotebookTabChanged>>",
                            lambda _event: self.view_switcher.select(self.notebook.index(self.notebook.select())))
         self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.after_idle(self._align_view_switcher), add="+")
+        footer = ttk.Frame(self, style="Surface.TFrame", padding=(8, 2, 12, 3))
+        footer.pack(side="bottom", fill="x")
+        self.version_label = ttk.Label(footer, text=f"v{APP_VERSION}", style="Footer.TLabel")
+        self.version_label.pack(side="right")
         self.notebook.pack(fill="both", expand=True)
         str_page = ttk.Frame(self.notebook)
+        self.animation_page = ttk.Frame(self.notebook)
         log_page = ttk.Frame(self.notebook)
         self.str_page, self.log_page = str_page, log_page
         self.notebook.add(str_page, text="  STR 云图  ")
+        self.notebook.add(self.animation_page, text="动态云图")
         self.notebook.add(log_page, text="  LOG 曲线  ")
-        paned = ttk.PanedWindow(str_page, orient="horizontal")
+        paned = ttk.PanedWindow(self.notebook, orient="horizontal")
         self.str_paned = paned
-        paned.pack(fill="both", expand=True)
+        paned.place(in_=str_page, relwidth=1, relheight=1)
         left_outer = ttk.Frame(paned, width=285, style="Surface.TFrame")
         right = ttk.Frame(paned)
         paned.add(left_outer, weight=0)
         paned.add(right, weight=1)
         actions = ttk.Frame(right, padding=(12, 10))
         actions.pack(fill="x")
+        self.str_actions = actions
         if self.header_icon:
             icon_label = ttk.Label(actions, image=self.header_icon)
             icon_label.pack(side="left", padx=(0, 9))
@@ -519,9 +565,6 @@ class TonyPlotApp(tk.Tk):
         self.header_title_labels.append(title_label)
         self.draw_button = ttk.Button(actions, text="画图 / 更新预览", command=self.preview, style="Accent.TButton")
         self.draw_button.pack(side="left", padx=(0, 8))
-        self.export_button = ttk.Button(actions, text="导出图片", command=self.export)
-        self.export_button.pack(side="left")
-        ttk.Button(actions, text="设置", command=self.open_settings).pack(side="right", padx=8)
         scroll = tk.Canvas(left_outer, highlightthickness=0, width=285, bg=BG)
         bar = ttk.Scrollbar(left_outer, orient="vertical", command=scroll.yview)
         scroll.configure(yscrollcommand=bar.set)
@@ -538,11 +581,6 @@ class TonyPlotApp(tk.Tk):
         self.directory_var = tk.StringVar()
         self.directory_entry = ttk.Entry(files, textvariable=self.directory_var)
         self.directory_entry.pack(fill="x")
-        row = ttk.Frame(files); row.pack(fill="x", pady=4)
-        self._wrap_buttons(row, [ttk.Button(row, text=label, command=command, style="Menu.TButton")
-                                for label, command in (("选择目录", self.choose_directory),
-                                                       ("加载目录", self.load_directory),
-                                                       ("添加文件", self.add_files))])
         self.file_list = tk.Listbox(files, selectmode="extended", height=7, exportselection=False,
                                     bg=SURFACE, fg=INK, selectbackground=ACCENT,
                                     selectforeground=SURFACE, relief="flat", borderwidth=1,
@@ -603,6 +641,14 @@ class TonyPlotApp(tk.Tk):
         self._entry(view, "深度最小值", "y0", 0)
         self._entry(view, "深度最大值", "y1", 25)
 
+        breaks = self._section(controls, "坐标轴截断")
+        for axis in ("x", "y"):
+            self._entry(breaks, f"{axis.upper()} 截断起点 (µm)", f"{axis}_break_start", "")
+            self._entry(breaks, f"{axis.upper()} 截断终点 (µm)", f"{axis}_break_end", "")
+            self._entry(breaks, f"{axis.upper()} 断口宽度 (%)", f"{axis}_break_gap", 5)
+            self._combo(breaks, f"{axis.upper()} 断口样式", f"{axis}_break_style",
+                        "闪电线", ("闪电线", "波浪线", "斜杠"))
+
         colors = self._section(controls, "色彩与渲染")
         presets = tuple(engine.COLOR_PRESETS)
         self._combo(colors, "电流色图", "current_cmap", "tonyplot_user_smooth", presets)
@@ -610,9 +656,9 @@ class TonyPlotApp(tk.Tk):
         self._combo(colors, "电流标度", "scale", "linear", ("linear", "log"))
         self._combo(colors, "渲染方式", "render", "fine_contour", ("fine_contour", "smooth", "smooth_contours"))
         self._entry(colors, "电流下限（空=自动）", "current_min", 0)
-        self._entry(colors, "电流上限（空=自动）", "current_max", 100)
+        self._entry(colors, "电流上限（空=自动）", "current_max", "")
         self._entry(colors, "温度下限（空=自动）", "temp_min", 300)
-        self._entry(colors, "温度上限（空=自动）", "temp_max", 334.5)
+        self._entry(colors, "温度上限（空=自动）", "temp_max", "")
         self._entry(colors, "自动上限百分位", "percentile", 99.5)
         self._entry(colors, "电流等值带数", "current_bands", 120)
         self._entry(colors, "温度等值带数", "temp_bands", 90)
@@ -622,22 +668,42 @@ class TonyPlotApp(tk.Tk):
         self._entry(output, "每列宽度 (英寸)", "panel_width", 3.2)
         self._entry(output, "每行高度 (英寸)", "panel_height", 2.2)
         self._entry(output, "导出 DPI", "dpi", self.preferences["dpi"])
-        ttk.Label(output, text="顶部按钮可画图并导出 PNG/PDF/SVG").pack(anchor="w", pady=3)
         self.status = LocalizedStringVar(self, value="选择 .str 文件后生成预览")
         status_row = ttk.Frame(right)
         status_row.pack(fill="x", padx=8, pady=4)
         self.status_label = ttk.Label(status_row, textvariable=self.status, anchor="w")
         self.status_label.pack(side="left", fill="x", expand=True)
-        self.version_labels = [ttk.Label(status_row, text=f"v{APP_VERSION}", foreground=MUTED)]
-        self.version_labels[0].pack(side="right")
         self.plot_area = ttk.Frame(right)
         self.plot_area.pack(fill="both", expand=True)
+        self.animation_area = ttk.Frame(right)
+        self.animation_exporting = False
+        self.show_animation_frames, self.current_animation_figure, self.animation_snapshot = build_animation_panel(
+            self, self.animation_area, lambda request: self._start_render("str", animation=request))
+        self.notebook.bind("<<NotebookTabChanged>>", self._switch_str_workspace, add="+")
         self.bind_class("LeftSettingsScroll", "<MouseWheel>", self._scroll_left)
         self._install_scroll_tag(left_outer)
         self._build_log_ui(log_page)
         for menu in (self.left_outer, self.log_left_outer):
             menu.bind("<Configure>", lambda _event: self.after_idle(self._align_view_switcher), add="+")
         self.after_idle(self._align_view_switcher)
+
+    def _switch_str_workspace(self, _event=None):
+        page = self.notebook.select()
+        if page == str(self.log_page):
+            self.str_paned.place_forget()
+            return
+        animated = page == str(self.animation_page)
+        self.str_paned.place(in_=self.animation_page if animated else self.str_page,
+                             relwidth=1, relheight=1)
+        self.str_paned.lift()
+        if animated:
+            self.str_actions.pack_forget()
+            self.plot_area.pack_forget()
+            self.animation_area.pack(fill="both", expand=True)
+        else:
+            self.animation_area.pack_forget()
+            self.str_actions.pack(fill="x", before=self.status_label.master)
+            self.plot_area.pack(fill="both", expand=True)
 
     def _align_view_switcher(self):
         if not hasattr(self, "log_plot_area"):
@@ -649,15 +715,14 @@ class TonyPlotApp(tk.Tk):
     def _register_tooltips(self):
         for widget, hint in self.control_hints:
             self.tooltips.register(widget, hint)
-        self.tooltips.register(self.view_switcher, lambda event:
-                               "STR：二维物理场云图。" if event.x < self.view_switcher.winfo_width() / 2
-                               else "LOG：曲线图和双 Y 轴。")
+        self.tooltips.register(self.view_switcher, lambda event: (
+            "STR：二维物理场云图。", "选择至少两个 STR 文件后播放。未高亮文件时使用整个列表。",
+            "LOG：曲线图和双 Y 轴。")[self.view_switcher.segment_at(event.x)])
         for paned in (self.str_paned, self.log_paned):
             self.tooltips.register(paned, "拖动中间分隔线可调整参数区和预览区的宽度。")
         self.tooltips.register(self.status_label, lambda _event: self.status.get())
         self.tooltips.register(self.log_status_label, lambda _event: self.log_status.get())
-        for label in self.version_labels:
-            self.tooltips.register(label, f"TonyPlotPy 版本 {APP_VERSION}")
+        self.tooltips.register(self.version_label, f"TonyPlotPy 版本 {APP_VERSION}")
         self.tooltips.register(self.log_x_combo,
                                "选择 LOG 横轴字段；时间字段默认换算为微秒。")
         self.tooltips.register(self.log_preview_combo,
@@ -783,13 +848,10 @@ class TonyPlotApp(tk.Tk):
         self.log_draw_button = ttk.Button(actions, text="画图 / 更新预览", command=self.preview_log,
                                           style="Accent.TButton")
         self.log_draw_button.pack(side="left", padx=(0, 8))
-        self.log_export_button = ttk.Button(actions, text="导出图片", command=self.export_log)
-        self.log_export_button.pack(side="left")
         self.log_preview_var = tk.StringVar()
         self.log_preview_combo = ttk.Combobox(actions, textvariable=self.log_preview_var,
                                                state="readonly", width=23)
         self.log_preview_combo.bind("<<ComboboxSelected>>", self._select_log_preview)
-        ttk.Button(actions, text="设置", command=self.open_settings).pack(side="right", padx=8)
         scroll = tk.Canvas(left, highlightthickness=0, width=285, bg=BG)
         bar = ttk.Scrollbar(left, orient="vertical", command=scroll.yview)
         scroll.configure(yscrollcommand=bar.set)
@@ -806,11 +868,6 @@ class TonyPlotApp(tk.Tk):
         self.log_directory_var = tk.StringVar()
         self.log_directory_entry = ttk.Entry(files, textvariable=self.log_directory_var)
         self.log_directory_entry.pack(fill="x")
-        row = ttk.Frame(files); row.pack(fill="x", pady=4)
-        self._wrap_buttons(row, [ttk.Button(row, text=label, command=command, style="Menu.TButton")
-                                for label, command in (("选择目录", self.choose_log_directory),
-                                                       ("加载目录", self.load_log_directory),
-                                                       ("添加文件", self.add_log_files))])
         self.log_file_list = tk.Listbox(files, selectmode="extended", height=6,
                                         exportselection=False, bg=SURFACE, fg=INK,
                                         selectbackground=ACCENT, selectforeground=SURFACE)
@@ -876,9 +933,6 @@ class TonyPlotApp(tk.Tk):
         status_row.pack(fill="x", padx=8, pady=4)
         self.log_status_label = ttk.Label(status_row, textvariable=self.log_status, anchor="w")
         self.log_status_label.pack(side="left", fill="x", expand=True)
-        version_label = ttk.Label(status_row, text=f"v{APP_VERSION}", foreground=MUTED)
-        version_label.pack(side="right")
-        self.version_labels.append(version_label)
         self.log_plot_area = ttk.Frame(right)
         self.log_plot_area.pack(fill="both", expand=True)
         self.bind_class("LogSettingsScroll", "<MouseWheel>", self._scroll_log)
@@ -925,6 +979,8 @@ class TonyPlotApp(tk.Tk):
                               tick_size=ticks[0].get_fontsize() if ticks else 8)
                 if hasattr(axis, "_tonyplot_axis_key"):
                     values["axis_key"] = axis._tonyplot_axis_key
+                if hasattr(figure, "_tonyplot_str_view"):
+                    values["str_view"] = figure._tonyplot_str_view
         return state
 
     def save_plot_set(self):
@@ -942,6 +998,7 @@ class TonyPlotApp(tk.Tk):
         try:
             save_config(path, self._plot_state())
             (self.log_status if kind == "log" else self.status).set(self.tr("配置已保存：") + path)
+            self._notify_saved(self.tr("配置已保存：") + path)
         except (OSError, ValueError, TypeError) as exc:
             messagebox.showerror(self.tr("配置保存失败"), str(exc), parent=self)
 
@@ -993,13 +1050,20 @@ class TonyPlotApp(tk.Tk):
                 self.field_settings = state["field_settings"]
                 self.panel_labels = state["panel_labels"]
                 self.figure_edits = state["figure_edits"]
+                old_axes = [item for item in self.figure_edits["str"].get("axes", {}).values()
+                            if "str_view" not in item]
+                if old_axes:
+                    current = {key: variable.get() for key, variable in self.vars.items()}
+                    saved_view = renderer.str_view_ranges(self._str_bounds(current), current["orientation"])
+                    for item in old_axes:
+                        item["str_view"] = saved_view
                 self.log_single_edits = state["log_single_edits"]
                 self._pending_set_curve = state.get("log_curve")
                 if self.files:
                     self.directory_var.set(str(self.files[0].parent))
                 if self.log_files:
                     self.log_directory_var.set(str(self.log_files[0].parent))
-                self.notebook.select(0 if state["active"] == "str" else 1)
+                self.notebook.select(self.str_page if state["active"] == "str" else self.log_page)
                 if files[state["active"]]:
                     self._start_render(state["active"])
             except (ValueError, KeyError, TypeError, tk.TclError) as exc:
@@ -1290,10 +1354,10 @@ class TonyPlotApp(tk.Tk):
                 available.intersection_update(self.str_headers[path])
             named = (available & set(FIELD_NAME_BY_CODE)) - DEFAULT_FIELD_CODES
             self.extra_field_codes = [code for code in engine.FIELD_DISPLAY_ORDER if code in named]
+            if 115 in named:
+                self.extra_field_codes.insert(self.extra_field_codes.index(115) + 1, "absolute_net_doping")
             for index, code in enumerate(self.extra_field_codes):
-                name = (engine.FIELD_LABELS_BY_CODE[code] if self.language == "English"
-                        else FIELD_NAME_BY_CODE[code])
-                self.field_list.insert("end", self.tr(name))
+                self.field_list.insert("end", self._extra_field_label(code))
                 if code in selected:
                     self.field_list.selection_set(index)
         except (OSError, ValueError) as exc:
@@ -1310,9 +1374,16 @@ class TonyPlotApp(tk.Tk):
             return "break"
         self.field_list.selection_set(index)
         code = self.extra_field_codes[index]
-        title = (engine.FIELD_LABELS_BY_CODE[code] if self.language == "English"
-                 else FIELD_NAME_BY_CODE[code])
-        self.open_field_settings(f"code:{code}", title)
+        self.open_field_settings(self._extra_field_id(code), self._extra_field_label(code))
+
+    @staticmethod
+    def _extra_field_id(code):
+        return f"code:{code}" if isinstance(code, int) else code
+
+    def _extra_field_label(self, code):
+        if code == "absolute_net_doping":
+            return self.tr("绝对净掺杂浓度")
+        return engine.FIELD_LABELS_BY_CODE[code] if self.language == "English" else FIELD_NAME_BY_CODE[code]
         return "break"
 
     def open_field_settings(self, field: str, title: str):
@@ -1327,21 +1398,25 @@ class TonyPlotApp(tk.Tk):
         edits = {}
         body = ttk.Frame(dialog, padding=16)
         body.pack(fill="both", expand=True)
-        is_doping = field in ("code:115", "net_doping")
+        is_doping = field in renderer.DOPING_FIELDS
+        scales = ("默认", "linear", "log")
+        if field == "absolute_net_doping":
+            scales = (*scales, "symlog")
+        elif is_doping:
+            scales = ("默认", "linear", "symlog")
         controls = [
             ("色图", "cmap", ("默认", *engine.COLOR_PRESETS)),
-            ("标度", "scale", ("默认", "linear", "log", "symlog") if is_doping else ("默认", "linear", "log")),
+            ("标度", "scale", scales),
             ("下限", "vmin", None),
             ("上限", "vmax", None),
             ("等值带数", "bands", None),
         ]
         if is_doping:
-            controls.extend((("净掺杂显示", "doping_mode", ("absolute", "signed")),
-                             ("对数阈值", "doping_floor", None)))
+            controls.append(("对数阈值", "doping_floor", None))
         for label, key, choices in controls:
             row = ttk.Frame(body); row.pack(fill="x", pady=4)
             ttk.Label(row, text=self.tr(label), width=10).pack(side="left")
-            default = "absolute" if key == "doping_mode" else ("默认" if choices else "")
+            default = "默认" if choices else ""
             variable = tk.StringVar(value=self.tr(values.get(key, default)))
             edits[key] = variable
             if choices:
@@ -1480,7 +1555,7 @@ class TonyPlotApp(tk.Tk):
         options = {key: variable.get() for key, variable in self.vars.items()}
         options["quantities"] = [q for q in QUANTITIES if self.quantity_vars[q].get()]
         options["quantities"].extend(
-            f"code:{self.extra_field_codes[index]}" for index in self.field_list.curselection()
+            self._extra_field_id(self.extra_field_codes[index]) for index in self.field_list.curselection()
         )
         options["field_settings"] = {key: value.copy() for key, value in self.field_settings.items()}
         options["panel_labels"] = copy.deepcopy(self.panel_labels)
@@ -1490,14 +1565,21 @@ class TonyPlotApp(tk.Tk):
         get = options.__getitem__
         quantities = options["quantities"]
         if not options["files"] or not quantities: raise ValueError("请选择至少一个 .str 文件和一个物理量")
-        x0, x1, y0, y1 = (float(get(k)) for k in ("x0", "x1", "y0", "y1"))
-        if x1 <= x0 or y1 <= y0: raise ValueError("显示范围的最大值必须大于最小值")
-        if get("mirror") and math.isclose(x1, float(get("mirror_x"))): x1 = 2 * x1 - x0
         if not 0 < float(get("percentile")) <= 100: raise ValueError("百分位必须在 0–100 之间")
         # A zero lower bound is useful for linear plots. In log mode the
         # renderer interprets it as automatic positive lower bound.
-        options["bounds"] = (x0, x1, y0, y1)
+        options["bounds"] = self._str_bounds(options)
+        options["axis_breaks"] = parse_breaks(options, options["bounds"])
         return options
+
+    @staticmethod
+    def _str_bounds(options):
+        x0, x1, y0, y1 = (float(options[key]) for key in ("x0", "x1", "y0", "y1"))
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError("显示范围的最大值必须大于最小值")
+        if options["mirror"] and math.isclose(x1, float(options["mirror_x"])):
+            x1 = 2 * x1 - x0
+        return x0, x1, y0, y1
 
     def preview(self):
         self._start_render("str")
@@ -1505,13 +1587,22 @@ class TonyPlotApp(tk.Tk):
     def preview_log(self):
         self._start_render("log")
 
-    def _start_render(self, kind):
+    def _start_render(self, kind, animation=None):
         if kind in self.file_loading:
             (self.status if kind == "str" else self.log_status).set("正在后台扫描文件和读取字段…")
             return
-        if self.busy: return
+        if self.busy or self.animation_exporting: return
         try:
             options = self.settings() if kind == "str" else self.settings_log()
+            if animation:
+                selected = self.file_list.curselection()
+                if selected:
+                    options["files"] = [self.files[index] for index in selected]
+                if len(options["files"]) < 2:
+                    raise ValueError("动态云图至少需要两个 STR 文件")
+                if options.get("materials_only"):
+                    raise ValueError("请关闭仅显示材料并选择云图物理量")
+                options["animation"] = animation
             options["kind"] = kind
             options["visual_edits"] = copy.deepcopy(self.figure_edits[kind])
             if kind == "log":
@@ -1519,9 +1610,7 @@ class TonyPlotApp(tk.Tk):
                 options["visual_edits_by_code"] = copy.deepcopy(self.log_single_edits)
             self.busy = True
             self.draw_button.configure(state="disabled")
-            self.export_button.configure(state="disabled")
             self.log_draw_button.configure(state="disabled")
-            self.log_export_button.configure(state="disabled")
             status = self.status if kind == "str" else self.log_status
             status.set("后台读取与绘制中，界面仍可操作…")
             # Tk image objects must be finalized on the UI thread, never by
@@ -1536,6 +1625,10 @@ class TonyPlotApp(tk.Tk):
 
     def _render_worker(self, options):
         try:
+            if options.get("animation"):
+                frames = render_frames(options, self.cache)
+                self.render_results.put((frames, None, options, None))
+                return
             if options["kind"] == "str":
                 figure = renderer.make_figure(options, self.cache)
             elif options["layout"] == "每曲线单独图片":
@@ -1569,12 +1662,23 @@ class TonyPlotApp(tk.Tk):
             return
         try:
             if error: self._render_failed(error, options["kind"] if options else self._active_kind())
+            elif options.get("animation"):
+                self.busy = False
+                for button in (self.draw_button, self.log_draw_button):
+                    button.configure(state="normal")
+                preview = options["animation"].get("preview")
+                if preview is not None:
+                    preview(figure[0])
+                    self.status.set("预览完成")
+                else:
+                    self.status.set("动态云图已生成")
+                    self.animation_render_options = options
+                    self.show_animation_frames(figure)
             elif isinstance(figure, list): self._show_log_batch(figure, options)
             else:
                 if options["kind"] == "log":
                     self.log_rendered = []
                     self.log_preview_combo.pack_forget()
-                    self.log_export_button.configure(text="导出图片")
                 self._show_figure(figure, renderer, options)
         finally:
             if self.gc_was_enabled: gc.enable()
@@ -1651,16 +1755,18 @@ class TonyPlotApp(tk.Tk):
         finally:
             self.busy = False
             self.draw_button.configure(state="normal")
-            self.export_button.configure(state="normal")
             self.log_draw_button.configure(state="normal")
-            self.log_export_button.configure(state="normal")
 
     def _active_kind(self):
-        return "log" if self.notebook.index(self.notebook.select()) == 1 else "str"
+        return "log" if self.notebook.select() == str(self.log_page) else "str"
+
+    def _file_menu_action(self, action):
+        qualifier = "log_" if self._active_kind() == "log" else ""
+        target = "files" if action == "add" else "directory"
+        getattr(self, f"{action}_{qualifier}{target}")()
 
     def _show_log_batch(self, rendered, options):
         self.log_rendered = rendered
-        self.log_export_button.configure(text=f"导出全部 {len(rendered)} 张")
         labels = self._unique_display_names([label for _code, label, _, _ in rendered])
         self.log_preview_combo.configure(values=labels)
         self.log_preview_var.set(labels[0])
@@ -1687,24 +1793,23 @@ class TonyPlotApp(tk.Tk):
     def _render_failed(self, error, kind):
         self.busy = False
         self.draw_button.configure(state="normal")
-        self.export_button.configure(state="normal")
         self.log_draw_button.configure(state="normal")
-        self.log_export_button.configure(state="normal")
         (self.log_status if kind == "log" else self.status).set("绘图失败")
         messagebox.showerror(self.tr("绘图失败"), self.tr(error))
 
     def export(self):
-        self._export_kind("str")
-
-    def export_log(self):
-        self._export_kind("log")
+        kind = "animation" if self.notebook.select() == str(self.animation_page) else self._active_kind()
+        self._export_kind(kind)
 
     def _export_kind(self, kind):
-        if self.busy: return
-        figure = self.log_figure if kind == "log" else self.figure
+        if self.busy or self.animation_exporting:
+            return
+        if kind == "animation":
+            figure = self.current_animation_figure()
+        else:
+            figure = self.log_figure if kind == "log" else self.figure
         if figure is None:
-            messagebox.showinfo(self.tr("请先画图"),
-                                self.tr("点击顶部“画图 / 更新预览”，完成后再导出。"))
+            messagebox.showinfo(self.tr("请先画图"), self.tr("生成预览后即可保存图片。"))
             return
         directory = self.log_directory_var if kind == "log" else self.directory_var
         files = self.log_files if kind == "log" else self.files
@@ -1714,17 +1819,29 @@ class TonyPlotApp(tk.Tk):
             image_dir = files[0].parent if files else Path.home()
         if kind == "log":
             default_name = f"{self.log_files[0].parent.name}_log_curves.png" if self.log_files else "log_curves.png"
+        elif kind == "animation":
+            default_name = "animation.gif"
         else:
             default_name = f"{self.files[0].parent.name}_cloud_map.png" if self.files else "cloud_map.png"
+        filetypes = [("PNG image", "*.png"), ("PDF document", "*.pdf"), ("SVG vector", "*.svg")]
+        if kind == "animation":
+            filetypes[:0] = [("GIF animation", "*.gif"), ("MP4 video", "*.mp4")]
         path = filedialog.asksaveasfilename(
             initialdir=str(image_dir), initialfile=default_name,
-            defaultextension=".png",
-            filetypes=[("PNG image", "*.png"), ("PDF document", "*.pdf"), ("SVG vector", "*.svg")],
+            defaultextension=".gif" if kind == "animation" else ".png",
+            filetypes=filetypes,
         )
         if not path: return
         try:
             dpi_key = "log_dpi" if kind == "log" else "dpi"
             dpi = int(self.vars[dpi_key].get())
+            if kind == "animation" and Path(path).suffix.lower() in (".gif", ".mp4"):
+                snapshot = self.animation_snapshot()
+                if snapshot is None:
+                    messagebox.showinfo(self.tr("请先画图"), self.tr("请先点击“画动态图”生成完整序列。"), parent=self)
+                    return
+                self._export_animation(path, *snapshot, dpi)
+                return
             if kind == "log" and self.log_rendered:
                 base = Path(path)
                 outputs = []
@@ -1734,23 +1851,66 @@ class TonyPlotApp(tk.Tk):
                     self._save_figure(item, output, dpi)
                     outputs.append(output)
                 self.log_status.set(f"已导出 {len(outputs)} 张图片到：{base.parent}")
+                self._notify_saved(f"已导出 {len(outputs)} 张图片到：{base.parent}")
             else:
                 self._save_figure(figure, path, dpi)
                 (self.log_status if kind == "log" else self.status).set(f"已导出：{path}")
+                self._notify_saved(f"已导出：{path}")
         except Exception as exc: messagebox.showerror(self.tr("导出失败"), self.tr(str(exc)))
+
+    def _export_animation(self, path, edits_by_path, fps, dpi):
+        options = self.animation_render_options
+        cache = self.cache.copy()
+        self.animation_exporting = True
+        self.status.set("正在后台导出动画…")
+        result = queue.Queue()
+        gc_enabled = gc.isenabled()
+        gc.disable()
+
+        def worker():
+            try:
+                with quiet_export():
+                    frames = render_frames(options, cache, export_dpi=dpi, edits_by_path=edits_by_path)
+                    save_animation(path, frames, fps)
+            except Exception as exc:
+                result.put(str(exc))
+            else:
+                result.put(None)
+
+        def poll():
+            try:
+                error = result.get_nowait()
+            except queue.Empty:
+                self.after(100, poll)
+                return
+            self.animation_exporting = False
+            if gc_enabled:
+                gc.enable()
+            if error is None:
+                self.status.set(f"已导出：{path}")
+                self._notify_saved(f"已导出：{path}")
+            else:
+                self.status.set("导出失败")
+                messagebox.showerror(self.tr("导出失败"), self.tr(error), parent=self)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(100, poll)
+
+    def _notify_saved(self, message):
+        messagebox.showinfo(self.tr("保存完成"), self.tr(message), parent=self)
 
     @staticmethod
     def _save_figure(figure, path, dpi):
         export_size = getattr(figure, "_tonyplot_export_size", None)
-        if export_size is None:
-            figure.savefig(path, dpi=dpi, bbox_inches="tight")
-            return
         preview_size = tuple(figure.get_size_inches())
-        try:
-            figure.set_size_inches(*export_size, forward=False)
-            figure.savefig(path, dpi=dpi, bbox_inches="tight")
-        finally:
-            figure.set_size_inches(*preview_size, forward=False)
+        with quiet_export():
+            try:
+                if export_size is not None:
+                    figure.set_size_inches(*export_size, forward=False)
+                figure.savefig(path, dpi=dpi, bbox_inches="tight")
+            finally:
+                if export_size is not None:
+                    figure.set_size_inches(*preview_size, forward=False)
 
 
 

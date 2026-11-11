@@ -51,7 +51,7 @@ def save_config(path, state):
             except ValueError:
                 mapping[filename] = filename
     portable = remap_paths(state, mapping)
-    document = {"format": "TonyPlotPy", "schema_version": 1,
+    document = {"format": "TonyPlotPy", "schema_version": 2,
                 "app_version": APP_VERSION, "state": encode(portable)}
     path.write_text(json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
@@ -59,11 +59,18 @@ def save_config(path, state):
 def load_config(path):
     path = Path(path)
     document = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(document, dict) or document.get("format") != "TonyPlotPy" or document.get("schema_version") != 1:
+    if not isinstance(document, dict) or document.get("format") != "TonyPlotPy" or document.get("schema_version") not in (1, 2):
         raise ValueError("This is not a supported TonyPlotPy set file")
     state = decode(document["state"])
     if not isinstance(state, dict) or state.get("active") not in ("str", "log"):
         raise ValueError("Invalid plotting configuration")
+    if document["schema_version"] == 1:
+        doping = state.get("field_settings", {}).get("code:115", {})
+        if doping.get("doping_mode", "absolute") == "absolute":
+            state = remap_paths(state, {"code:115": "absolute_net_doping"})
+            if "extra_fields" in state:
+                state["extra_fields"] = ["absolute_net_doping" if code == 115 else code
+                                         for code in state["extra_fields"]]
     mapping = {}
     for kind in ("str", "log"):
         for filename in state["files"][kind]:

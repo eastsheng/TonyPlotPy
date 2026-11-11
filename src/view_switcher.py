@@ -18,9 +18,9 @@ class ViewSwitcher(tk.Canvas):
         self.bind("<Button-1>", self._click)
         self.bind("<Motion>", self._hover)
         self.bind("<Leave>", lambda _event: self._set_hover(None))
-        self.bind("<Left>", lambda _event: self._choose(0))
-        self.bind("<Right>", lambda _event: self._choose(1))
-        self.bind("<space>", lambda _event: self._choose(1 - self.selected))
+        self.bind("<Left>", lambda _event: self._choose((self.selected - 1) % len(self.labels)))
+        self.bind("<Right>", lambda _event: self._choose((self.selected + 1) % len(self.labels)))
+        self.bind("<space>", lambda _event: self._choose((self.selected + 1) % len(self.labels)))
         self.bind("<Configure>", lambda _event: self.redraw())
 
     def configure_theme(self, palette, font_size, background):
@@ -37,7 +37,10 @@ class ViewSwitcher(tk.Canvas):
 
     def _resize_width(self):
         font = tkfont.Font(self, family="Segoe UI", size=self.font_size, weight="bold")
-        self.configure(width=2 * (max(font.measure(label) for label in self.labels) + 49) + 6)
+        self.configure(width=len(self.labels) * (max(font.measure(label) for label in self.labels) + 49) + 6)
+
+    def segment_at(self, x):
+        return min(len(self.labels) - 1, max(0, int(x * len(self.labels) / self.winfo_width())))
 
     def select(self, index):
         self.selected = index
@@ -49,10 +52,10 @@ class ViewSwitcher(tk.Canvas):
 
     def _click(self, event):
         self.focus_set()
-        return self._choose(0 if event.x < self.winfo_width() / 2 else 1)
+        return self._choose(self.segment_at(event.x))
 
     def _hover(self, event):
-        self._set_hover(0 if event.x < self.winfo_width() / 2 else 1)
+        self._set_hover(self.segment_at(event.x))
 
     def _set_hover(self, index):
         if self.hovered != index:
@@ -72,7 +75,7 @@ class ViewSwitcher(tk.Canvas):
         self.delete("all")
         width = self.winfo_width() if self.winfo_width() > 1 else int(self.cget("width"))
         height = max(self.winfo_height(), int(self.cget("height")))
-        segment = (width - 6) / 2
+        segment = (width - 6) / len(self.labels)
         self._rounded(0, 0, width, height, 8, fill=self.palette["tab"], outline="")
         for index, label in enumerate(self.labels):
             left = 3 + index * segment
@@ -89,6 +92,9 @@ class ViewSwitcher(tk.Canvas):
                     self.create_line(x, center + offset + 2, x + 5, center + offset - 2,
                                      x + 11, center + offset + 1, x + 16, center + offset - 3,
                                      smooth=True, fill=color, width=1.5)
+            elif index == 1:
+                self.create_polygon(x + 2, center - 8, x + 2, center + 8, x + 16, center,
+                                    fill=color)
             else:
                 self.create_line(x, center - 8, x, center + 8, x + 17, center + 8,
                                  fill=color, width=1.3)

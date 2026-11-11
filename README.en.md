@@ -1,6 +1,6 @@
 # TonyPlotPy
 
-**Language: [中文（默认）](README.md) | English** · Version v0.4.1 · [MIT License](LICENSE)
+**Language: [中文（默认）](README.md) | English** · Version v0.4.2 · [MIT License](LICENSE)
 
 TonyPlotPy is a desktop application for Atlas ASCII `.str` cloud maps and Atlas SSF `.log` curves. The STR workflow builds on `plot_switching_str_cloud_maps_on.py` and supports mesh parsing, field mapping validation, cell mirroring, structure overlays, TonyPlot colormaps, and three rendering methods.
 
@@ -27,7 +27,7 @@ Structure annotations use arrows without background fills. The material legend d
 
 Named fields include total/donor/acceptor and ionized doping, potential, electric field magnitude/components, carrier concentrations, quasi-Fermi levels, velocities, mobilities/components, Joule/recombination/total heat power densities, thermal conductivity, specific heat, recombination rates, and ionization coefficients. Only known fields saved in all selected files appear; colorbars include units. Unknown extensions and region-index metadata remain hidden. The metadata in `src/plotting/field_catalog.py` was checked against TonyPlot 5.0.22.R's quantity catalog.
 
-Net doping defaults to absolute values with logarithmic colors, a 1e12 cm⁻³ lower limit, and an upper limit rounded up to the next decade from the visible maximum magnitude. Current limits and percentile clipping do not apply. Double-click the field to select signed values (symlog by default), set limits/scale, and adjust the log threshold (blank: 1e12 cm⁻³). This threshold is the default lower limit for absolute log mode and the linear-region threshold for symlog. The `tonyplot_user_smooth` palette is approximate; exact color matching requires the same reference palette, display mode, and limits.
+STR maps and animations offer Net doping concentration and Absolute net doping concentration as separate fields. Net doping retains the N/P sign and defaults to a symmetric logarithmic scale. Absolute net doping defaults to a logarithmic scale with a lower limit of 1e12 cm⁻³ and an upper limit rounded up to the next decade from the visible maximum magnitude. Double-click either field to adjust its limits, scale, and log threshold independently. The `tonyplot_user_smooth` palette is approximate. Exact color matching requires the same reference palette, display mode, and limits.
 
 Cloud maps use triangles and stored nodal values from every material region, including electrode, gate, and emitter regions. Structure overlays draw boundaries without covering the physical field with fixed material colors. Automatic color limits include all regions.
 

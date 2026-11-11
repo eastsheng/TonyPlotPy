@@ -16,12 +16,13 @@ from .plotting.font_presets import available_paper_fonts
 
 
 class FigureEditor:
-    def __init__(self, root, figure, canvas, edits: dict, status=None):
+    def __init__(self, root, figure, canvas, edits: dict, status=None, on_commit=None):
         self.root = root
         self.figure = figure
         self.canvas = canvas
         self.edits = edits
         self.status = status
+        self.on_commit = on_commit
         self.arrow_start = None
         self.arrow_mode = False
         self._material_drag = None
@@ -111,6 +112,8 @@ class FigureEditor:
         values["location"] = tuple(legend._loc)
         axis._tonyplot_material_legend_style = values
         self.edits.setdefault("material_legends", {})[axis._tonyplot_axis_key] = copy.deepcopy(values)
+        if self.on_commit is not None:
+            self.on_commit()
 
     def open_context_menu(self, event):
         menu = tk.Menu(self.root, tearoff=False)
@@ -230,6 +233,8 @@ class FigureEditor:
                 if hasattr(self.root, "checkpoint_edit") and hasattr(self, "edit_kind"):
                     self.root.checkpoint_edit(self.edit_kind)
                 commit()
+                if self.on_commit is not None:
+                    self.on_commit()
                 window.destroy()
 
         ttk.Button(row, text="取消", command=cancel).pack(side="right")
@@ -637,12 +642,16 @@ class FigureEditor:
             return True
 
         def commit():
+            previous = self.edits.get("texts", {}).get(key, {})
             self.edits.setdefault("texts", {})[key] = {
                 "text": artist.get_text(), "size": artist.get_fontsize(),
                 "color": artist.get_color(),
                 "font_family": font_family.get(),
                 "weight": artist.get_fontweight(),
             }
+            if (self.on_commit is not None and key.endswith(":title")
+                    and artist.get_text() == original["text"] and previous.get("preserve_text", not previous)):
+                self.edits["texts"][key]["preserve_text"] = True
             if key != "figure_title":
                 axis = self.figure.axes[int(key.split(":")[1])]
                 if hasattr(axis, "_tonyplot_axis_key"):
@@ -733,6 +742,8 @@ class FigureEditor:
             }
             if hasattr(axis, "_tonyplot_axis_key"):
                 self.edits["axes"][str(index)]["axis_key"] = axis._tonyplot_axis_key
+            if hasattr(self.figure, "_tonyplot_str_view"):
+                self.edits["axes"][str(index)]["str_view"] = self.figure._tonyplot_str_view
 
         def rollback():
             axis.set_xscale(original["xscale"])

@@ -7,9 +7,11 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib.collections import LineCollection, PolyCollection
-from matplotlib.colors import LinearSegmentedColormap, LogNorm, Normalize
+from matplotlib.colors import LinearSegmentedColormap, LogNorm, Normalize, SymLogNorm
 from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import SymmetricalLogLocator
 from .field_catalog import FIELDS as ADDITIONAL_FIELDS, DISPLAY_ORDER as ADDITIONAL_ORDER
+from .font_presets import available_paper_fonts
 
 
 # Renderer defaults. The desktop interface supplies data paths and plot settings.
@@ -41,9 +43,9 @@ CURRENT_CONTOUR_BANDS = 120  # 仅 fine_contour 模式使用，避免 10 级色�
 TEMPERATURE_CONTOUR_BANDS = 90
 GUIDE_CONTOUR_LINES = 16  # 仅 smooth_contours 模式使用
 CURRENT_VMIN = 0  # 例如 1e-2；None 表示自动
-CURRENT_VMAX = 100  # 例如 1e4；None 表示自动
+CURRENT_VMAX = None  # None 表示自动
 TEMPERATURE_VMIN = 300
-TEMPERATURE_VMAX = 334.5
+TEMPERATURE_VMAX = None
 PERCENTILE_MAX = 99.5  # 自动色标上限，抑制孤立极值
 # 以下数字为 Atlas 5.30 ASCII .str 中 s 记录的字段编号。读取时会检验
 # |J_e|、|J_h| 与其 x/y 分量的关系，避免静默使用不兼容的 .str 文件。
@@ -405,8 +407,44 @@ def draw_field(ax, triangulation, values, quantity, cmap, norm):
     )
 
 
+class SpacedSymLogLocator(SymmetricalLogLocator):
+    """Keep zero and as many decade labels as the colorbar can fit."""
+
+    def __init__(self, norm):
+        super().__init__(linthresh=norm.linthresh, base=10, subs=[1])
+        self.norm = norm
+
+    def tick_values(self, vmin, vmax):
+        lower, upper = sorted((vmin, vmax))
+        candidates = [tick for tick in super().tick_values(lower, upper) if lower <= tick <= upper]
+        if lower <= 0 <= upper and 0 not in candidates:
+            candidates.append(0)
+        if not candidates:
+            candidates = [lower, upper]
+        axis = self.axis
+        height = axis.axes.bbox.height * 72 / axis.axes.figure.dpi
+        tick = axis.get_major_ticks(1)[0]
+        min_spacing = 1.8 * max(tick.label1.get_fontsize(), tick.label2.get_fontsize())
+        chosen = []
+        for value in sorted(candidates, key=lambda tick: (tick != 0, -abs(tick))):
+            position = float(self.norm(value)) * height
+            if all(abs(position - previous) >= min_spacing for _, previous in chosen):
+                chosen.append((value, position))
+        return sorted(value for value, _ in chosen)
+
+
 def add_colorbar(figure, image, **kwargs):
     """等值带图仍使用连续色条，避免色条出现分段线。"""
     if RENDER_STYLE == "fine_contour":
         image = ScalarMappable(norm=image.norm, cmap=image.cmap)
-    return figure.colorbar(image, **kwargs)
+    bar = figure.colorbar(image, **kwargs)
+    if isinstance(image.norm, SymLogNorm):
+        bar.locator = SpacedSymLogLocator(image.norm)
+        bar.update_ticks()
+        bar.minorticks_off()
+    available = available_paper_fonts()
+    family = next((font for font in ("Arial", "Helvetica", "DejaVu Sans") if font in available), "sans-serif")
+    axis = bar.ax.yaxis if bar.orientation == "vertical" else bar.ax.xaxis
+    for label in [axis.label, axis.get_offset_text(), *axis.get_ticklabels(which="both")]:
+        label.set_fontfamily(family)
+    return bar

@@ -2,6 +2,20 @@
 from __future__ import annotations
 
 from matplotlib.transforms import Bbox
+from matplotlib.layout_engine import ConstrainedLayoutEngine
+
+
+class CloudLayoutEngine(ConstrainedLayoutEngine):
+    """Measure the default colorbar positions before applying user offsets."""
+
+    measuring_colorbars = False
+
+    def execute(self, figure):
+        self.measuring_colorbars = True
+        try:
+            return super().execute(figure)
+        finally:
+            self.measuring_colorbars = False
 
 
 class ColorbarLocator:
@@ -16,8 +30,10 @@ class ColorbarLocator:
         width, height = axis.figure.get_size_inches()
         values = self.values
         w, h = values["width"] / width, values["height"] / height
-        return Bbox.from_bounds(box.x0 + box.width / 2 - w / 2 + values["dx"] / width,
-                                box.y0 + box.height / 2 - h / 2 + values["dy"] / height, w, h)
+        measuring = getattr(axis.figure.get_layout_engine(), "measuring_colorbars", False)
+        dx, dy = (0, 0) if measuring else (values["dx"], values["dy"])
+        return Bbox.from_bounds(box.x0 + box.width / 2 - w / 2 + dx / width,
+                                box.y0 + box.height / 2 - h / 2 + dy / height, w, h)
 
 
 def apply_colorbar_style(axis, values):
@@ -115,7 +131,8 @@ def apply_edits(figure, edits: dict) -> None:
         except (IndexError, KeyError, ValueError):
             continue
         if artist is not None:
-            artist.set_text(values["text"])
+            if not values.get("preserve_text"):
+                artist.set_text(values["text"])
             artist.set_fontsize(values["size"])
             if "color" in values:
                 artist.set_color(values["color"])
@@ -132,8 +149,13 @@ def apply_edits(figure, edits: dict) -> None:
             continue
         axis.set_xscale(values["xscale"])
         axis.set_yscale(values["yscale"])
-        axis.set_xlim(*values["xlim"])
-        axis.set_ylim(*values["ylim"])
+        broken_x, broken_y = getattr(axis, "_tonyplot_break_limits", (False, False))
+        current_view = getattr(figure, "_tonyplot_str_view", None)
+        saved_view = values.get("str_view", current_view)
+        if not broken_x and (current_view is None or current_view[0] == saved_view[0]):
+            axis.set_xlim(*values["xlim"])
+        if not broken_y and (current_view is None or current_view[1] == saved_view[1]):
+            axis.set_ylim(*values["ylim"])
         axis.tick_params(axis="both", labelsize=values["tick_size"])
         if "tick_color" in values:
             axis.tick_params(axis="both", colors=values["tick_color"])
@@ -162,10 +184,18 @@ def apply_edits(figure, edits: dict) -> None:
         touched_legends.add(axis)
     for axis in touched_legends:
         refresh_legend(axis)
-    if hasattr(figure, "_tonyplot_export_size") and (
+    # A constrained layout must keep its engine once colorbars have been added.
+    if hasattr(figure, "_tonyplot_export_size") and not isinstance(
+        figure.get_layout_engine(), ConstrainedLayoutEngine
+    ) and (
         edits.get("texts") or touched_legends or edits.get("axes")
     ):
         figure.tight_layout(pad=0.5)
+    if "arrows" in edits:
+        for axis in figure.axes:
+            for artist in list(axis.texts):
+                if hasattr(artist, "_tonyplot_arrow_index"):
+                    artist.remove()
     for index, values in enumerate(edits.get("arrows", [])):
         try:
             add_arrow(figure, values, index)

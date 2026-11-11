@@ -1,3 +1,4 @@
 @echo off
 cd /d "%~dp0"
-py tonyplotpy.py
+start "" pyw "%~dp0tonyplotpy.py"
+exit /b

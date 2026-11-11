@@ -11,11 +11,17 @@ from matplotlib.figure import Figure
 from matplotlib.transforms import Bbox
 
 from . import atlas_engine as engine
+from .axis_breaks import mark_breaks, panel_cells
+from .figure_edits import CloudLayoutEngine
 
 FIELD_NAME_BY_CODE = engine.FIELD_LABELS_BY_CODE
+DOPING_FIELDS = ("code:115", "net_doping", "absolute_net_doping")
 
 
 def quantity_label(quantity: str) -> str:
+    if quantity in DOPING_FIELDS:
+        return (r"Absolute net doping (cm$^{-3}$)" if quantity == "absolute_net_doping"
+                else r"Net doping (cm$^{-3}$)")
     if quantity in engine.LABELS:
         return engine.LABELS[quantity]
     if quantity.startswith("code:"):
@@ -26,6 +32,12 @@ def quantity_label(quantity: str) -> str:
 
 def optional_float(value: str) -> float | None:
     return None if str(value).strip().lower() in ("", "auto", "none") else float(value)
+
+
+def str_view_ranges(bounds, orientation):
+    x = ("x", *bounds[:2])
+    y = ("y", *bounds[2:])
+    return (y, x) if orientation.startswith("横向") else (x, y)
 
 
 def panel_layout(options):
@@ -55,19 +67,20 @@ def read_structure(path: Path, options: dict, cache: dict) -> engine.Structure:
 def field_norm(structures: list[engine.Structure], quantity: str, bounds: tuple,
                overrides: dict):
     """Use the field's shared auto range, then apply its optional overrides."""
-    if quantity in ("code:115", "net_doping"):
+    if quantity in DOPING_FIELDS:
+        absolute = quantity == "absolute_net_doping"
+        source = "code:115" if absolute else quantity
         x0, x1, y0, y1 = bounds
         arrays = []
         for structure in structures:
             nodes = np.unique(structure.triangles)
             inside = ((structure.x[nodes] >= x0) & (structure.x[nodes] <= x1)
                       & (structure.y[nodes] >= y0) & (structure.y[nodes] <= y1))
-            data = structure.values[quantity][nodes[inside]]
+            data = structure.values[source][nodes[inside]]
             arrays.append(data[np.isfinite(data)])
         data = np.concatenate(arrays)
         if not data.size:
             raise ValueError("净掺杂：当前视野没有有效节点")
-        absolute = overrides.get("doping_mode", "absolute") == "absolute"
         scale = overrides.get("scale", "默认")
         if scale == "默认":
             scale = "log" if absolute else "symlog"
@@ -127,7 +140,7 @@ def field_norm(structures: list[engine.Structure], quantity: str, bounds: tuple,
     return LogNorm(vmin=lower, vmax=upper, clip=True) if scale == "log" else Normalize(vmin=lower, vmax=upper, clip=True)
 
 
-def make_figure(options: dict, cache: dict) -> Figure:
+def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=None) -> Figure:
     """Create one combined figure from selected snapshots and quantities."""
     engine.RENDER_STYLE = options["render"]
     engine.CURRENT_CONTOUR_BANDS = int(options["current_bands"])
@@ -143,11 +156,14 @@ def make_figure(options: dict, cache: dict) -> Figure:
     engine.PERCENTILE_MAX = float(options["percentile"])
 
     quantities, bounds, files = options["quantities"], options["bounds"], options["files"]
-    structures = [read_structure(path, options, cache) for path in files]
+    structures = [read_structure(path, options, cache) if prepared is None else prepared[path]
+                  for path in files]
     labels = [engine.snapshot_info(str(path))[1] for path in files]
     if options.get("materials_only", False):
         from .material_renderer import make_material_figure
-        return make_material_figure(options, structures, labels)
+        figure = make_material_figure(options, structures, labels)
+        figure._tonyplot_str_view = str_view_ranges(bounds, options["orientation"])
+        return figure
     panels, columns = panel_layout(options)
     if columns < 1:
         raise ValueError("列数必须至少为 1")
@@ -156,32 +172,56 @@ def make_figure(options: dict, cache: dict) -> Figure:
     if width <= 0 or height <= 0:
         raise ValueError("图尺寸必须大于 0")
 
-    figure = Figure(figsize=(width * columns, height * rows), constrained_layout=True)
+    figure = Figure(figsize=(width * columns, height * rows), layout=CloudLayoutEngine())
+    figure._tonyplot_str_view = str_view_ranges(bounds, options["orientation"])
     figure.patch.set_facecolor("white")
-    axes = figure.subplots(rows, columns, squeeze=False)
     rotated = options["orientation"].startswith("横向")
     overlay = options["overlay"]
+    cuts = options.get("axis_breaks", {})
+    xstyle = options.get("x_break_style", "闪电线")
+    ystyle = options.get("y_break_style", "闪电线")
+    x0, x1, y0, y1 = bounds
+    if rotated:
+        xlim, ylim = (y0 - (1.25 if overlay else 0), y1), (x0, x1)
+        xcut, ycut = cuts.get("y"), cuts.get("x")
+        xstyle, ystyle = ystyle, xstyle
+    else:
+        xlim, ylim = (x0, x1), (y1, y0 - (2.6 if overlay else 0))
+        xcut, ycut = cuts.get("x"), cuts.get("y")
+    if cuts:
+        cells = panel_cells(figure, rows, columns, len(panels), xlim, ylim, xcut, ycut)
+    else:
+        axes = figure.subplots(rows, columns, squeeze=False)
+        for axis in list(axes.flat)[len(panels):]:
+            axis.set_visible(False)
+        cells = ((index, axis, xlim, ylim, 0, 0, 1, 1)
+                 for index, axis in enumerate(list(axes.flat)[:len(panels)]))
     field_settings = options.get("field_settings", {})
     shared_currents = set(quantities) & {"electron", "hole", "total"}
     if len(shared_currents) < 2:
         shared_currents = set()
-    norms = {
-        quantity: field_norm(structures, quantity, bounds,
+    norms = sequence_norms if sequence_norms else {
+        quantity: field_norm(list(prepared.values()) if prepared is not None else structures, quantity, bounds,
                              {} if quantity in shared_currents else field_settings.get(quantity, {}))
         for quantity in quantities
     }
-    if shared_currents:
+    if shared_currents and not sequence_norms:
         current_norms = [norms[q] for q in shared_currents]
         norm_type = LogNorm if options["scale"] == "log" else Normalize
         common_norm = norm_type(vmin=min(norm.vmin for norm in current_norms),
                                 vmax=max(norm.vmax for norm in current_norms), clip=True)
         for quantity in shared_currents:
             norms[quantity] = common_norm
+    if sequence_norms is not None and not sequence_norms:
+        sequence_norms.update(norms)
     colorbar_groups = {}
-    x0, x1, y0, y1 = bounds
-    for index, (file_index, quantity) in enumerate(panels):
-        ax = axes.flat[index]
+    for index, ax, pane_xlim, pane_ylim, pane_row, pane_col, pane_rows, pane_cols in cells:
+        file_index, quantity = panels[index]
         ax._tonyplot_axis_key = ("str", str(files[file_index]), quantity)
+        if pane_row or pane_col:
+            ax._tonyplot_axis_key += ("pane", pane_row, pane_col)
+        if cuts:
+            ax._tonyplot_break_limits = (xcut is not None, ycut is not None)
         structure = structures[file_index]
         if rotated:
             tri = mtri.Triangulation(structure.y, structure.x, structure.triangles)
@@ -204,23 +244,21 @@ def make_figure(options: dict, cache: dict) -> Figure:
                 engine.TEMPERATURE_CONTOUR_BANDS = int(options["temp_bands"])
             else:
                 engine.CURRENT_CONTOUR_BANDS = int(options["current_bands"])
-        values = structure.values[quantity]
-        if quantity in ("code:115", "net_doping") and field_options.get("doping_mode", "absolute") == "absolute":
-            values = np.abs(values)
+        values = (np.abs(structure.values["code:115"]) if quantity == "absolute_net_doping"
+                  else structure.values[quantity])
         image = engine.draw_field(ax, tri, values, quantity, cmap, norms[quantity])
         group_key = "shared_current" if quantity in shared_currents else quantity
-        group = colorbar_groups.setdefault(group_key, {"axes": [], "image": None})
+        group = colorbar_groups.setdefault(group_key, {"axes": [], "image": None, "panels": {}})
         group["axes"].append(ax)
+        group["panels"].setdefault(index, []).append(ax)
         group["image"] = image
         ax.set_facecolor("#f8fbfd")
+        ax.set_xlim(pane_xlim)
+        ax.set_ylim(pane_ylim)
         if rotated:
-            ax.set_xlim(y0 - (1.25 if overlay else 0), y1)
-            ax.set_ylim(x0, x1)
             ax.set_xlabel("Depth y (µm)")
             ax.set_ylabel("Lateral x (µm)")
         else:
-            ax.set_xlim(x0, x1)
-            ax.set_ylim(y1, y0 - (2.6 if overlay else 0))
             ax.set_xlabel("x (µm)")
             ax.set_ylabel("Depth y (µm)")
         if overlay:
@@ -235,13 +273,13 @@ def make_figure(options: dict, cache: dict) -> Figure:
         visibility = options.get("panel_labels", {}).get((str(files[file_index]), quantity), {})
         if options.get("mesh", False):
             engine.plot_mesh(ax, structure, rotated=rotated)
-        ax.xaxis.label.set_visible(visibility.get("x", True))
-        ax.yaxis.label.set_visible(visibility.get("y", True))
+        ax.xaxis.label.set_visible(visibility.get("x", True) and pane_row == pane_rows - 1 and pane_col == 0)
+        ax.yaxis.label.set_visible(visibility.get("y", True) and pane_row == 0 and pane_col == 0)
         panel_title = labels[file_index]
         if options.get("show_quantity_title", False):
             panel_title += f" · {quantity_label(quantity)}"
-        ax.set_title(panel_title, fontsize=9,
-                     color="#183b56", pad=7)
+        if pane_row == 0 and pane_col == 0:
+            ax.set_title(panel_title, fontsize=9, color="#183b56", pad=7)
         ax.tick_params(direction="in", labelsize=8, colors="#52687a", width=0.7)
         if options.get("grid", False):
             ax.grid(True, axis="both", color="#64748b", linewidth=0.5, alpha=0.45)
@@ -250,8 +288,8 @@ def make_figure(options: dict, cache: dict) -> Figure:
         for spine in ax.spines.values():
             spine.set_color("#b8cbd8")
             spine.set_linewidth(0.7)
-    for ax in list(axes.flat)[len(panels):]:
-        ax.set_visible(False)
+        if cuts:
+            mark_breaks(ax, pane_row, pane_col, pane_rows, pane_cols, xstyle, ystyle)
     for quantity, group in colorbar_groups.items():
         panel_rows = {index // columns
                       for index, (_file_index, q) in enumerate(panels)
@@ -261,17 +299,17 @@ def make_figure(options: dict, cache: dict) -> Figure:
         colorbar = engine.add_colorbar(
             figure, group["image"], ax=group["axes"],
             label=(r"Current density $|J|$ (A/cm$^2$)" if quantity == "shared_current"
-                   else (r"Absolute net doping (cm$^{-3}$)" if field_settings.get(quantity, {}).get("doping_mode", "absolute") == "absolute"
-                         else r"Net doping (cm$^{-3}$)") if quantity in ("code:115", "net_doping")
                    else quantity_label(quantity)),
             shrink=shrink, pad=0.025,
         )
         if quantity == "shared_current":
             base_locator = colorbar.ax.get_axes_locator()
 
-            def compact_locator(axis, canvas_renderer, base=base_locator, parents=tuple(group["axes"])):
+            def compact_locator(axis, canvas_renderer, base=base_locator, panel_axes=tuple(group["panels"].values())):
                 box = base(axis, canvas_renderer)
-                height = min(parent.get_position().height for parent in parents) * 0.78
+                height = min(max(parent.get_position().y1 for parent in panes)
+                             - min(parent.get_position().y0 for parent in panes)
+                             for panes in panel_axes) * 0.78
                 figure_width, figure_height = axis.figure.get_size_inches()
                 width = height * figure_height / figure_width / 20
                 return Bbox.from_bounds(box.x0 + (box.width - width) / 2,
@@ -279,8 +317,6 @@ def make_figure(options: dict, cache: dict) -> Figure:
 
             colorbar.ax.set_axes_locator(compact_locator)
         colorbar.ax.tick_params(labelsize=8, colors="#52687a")
-        if quantity.startswith("code:"):
-            colorbar.ax.yaxis.label.set_fontfamily("DejaVu Sans")
         colorbar.ax._tonyplot_colorbar_key = quantity
         colorbar.ax._tonyplot_axis_key = ("colorbar", quantity)
         colorbar.outline.set_edgecolor("#b8cbd8")
