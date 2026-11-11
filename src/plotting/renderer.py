@@ -280,7 +280,7 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
             panel_title += f" · {quantity_label(quantity)}"
         if pane_row == 0 and pane_col == 0:
             ax.set_title(panel_title, fontsize=9, color="#183b56", pad=7)
-        ax.tick_params(direction="in", labelsize=8, colors="#52687a", width=0.7)
+        ax.tick_params(direction="in", labelsize=8, colors="black", width=0.7)
         if options.get("grid", False):
             ax.grid(True, axis="both", color="#64748b", linewidth=0.5, alpha=0.45)
         else:
@@ -316,7 +316,7 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
                                         box.y0 + (box.height - height) / 2, width, height)
 
             colorbar.ax.set_axes_locator(compact_locator)
-        colorbar.ax.tick_params(labelsize=8, colors="#52687a")
+        colorbar.ax.tick_params(labelsize=8, colors="black")
         colorbar.ax._tonyplot_colorbar_key = quantity
         colorbar.ax._tonyplot_axis_key = ("colorbar", quantity)
         colorbar.outline.set_edgecolor("#b8cbd8")

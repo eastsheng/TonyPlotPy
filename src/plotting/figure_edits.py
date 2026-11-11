@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from matplotlib.transforms import Bbox
 from matplotlib.layout_engine import ConstrainedLayoutEngine
+from .tick_intervals import interval_locator
 
 
 class CloudLayoutEngine(ConstrainedLayoutEngine):
@@ -46,6 +47,9 @@ def apply_colorbar_style(axis, values):
     axis.set_axes_locator(ColorbarLocator(base, values.copy()))
     axis.set_ylabel(values["label"], fontsize=values["label_size"],
                     color=values["color"], fontfamily=values["font_family"])
+    bar = axis._colorbar
+    bar.locator = interval_locator(axis.yaxis, values.get("tick_interval"), bar.locator)
+    bar.update_ticks()
     axis.tick_params(labelsize=values["tick_size"], colors=values["color"])
     set_tick_font_family(axis, values["font_family"])
     axis._colorbar.outline.set_edgecolor(values["color"])
@@ -156,6 +160,8 @@ def apply_edits(figure, edits: dict) -> None:
             axis.set_xlim(*values["xlim"])
         if not broken_y and (current_view is None or current_view[1] == saved_view[1]):
             axis.set_ylim(*values["ylim"])
+        axis.xaxis.set_major_locator(interval_locator(axis.xaxis, values.get("x_tick_interval")))
+        axis.yaxis.set_major_locator(interval_locator(axis.yaxis, values.get("y_tick_interval")))
         axis.tick_params(axis="both", labelsize=values["tick_size"])
         if "tick_color" in values:
             axis.tick_params(axis="both", colors=values["tick_color"])

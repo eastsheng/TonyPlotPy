@@ -7,6 +7,9 @@ from .control_hints import HINTS
 
 
 ENGLISH = {
+    "主刻度间隔（空=自动）": "Major tick interval (blank = auto)",
+    "横轴主刻度间隔": "X major tick interval", "纵轴主刻度间隔": "Y major tick interval",
+    "刻度间隔必须是大于 0 的有限数值": "Tick interval must be a positive finite number",
     "X 断口样式": "X break style", "Y 断口样式": "Y break style",
     "闪电线": "Lightning", "波浪线": "Wave", "斜杠": "Slashes",
     "坐标轴截断": "Axis breaks",

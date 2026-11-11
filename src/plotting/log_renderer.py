@@ -23,6 +23,8 @@ mpl.rcParams.update({
     "axes.labelsize": 9,
     "xtick.labelsize": 8,
     "ytick.labelsize": 8,
+    "xtick.color": "black",
+    "ytick.color": "black",
     "legend.fontsize": 7.5,
     "axes.linewidth": 0.8,
     "xtick.direction": "in",

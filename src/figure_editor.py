@@ -13,6 +13,7 @@ from .plotting.figure_edits import (
     add_arrow, apply_line_style, refresh_legend, set_tick_font_family, apply_colorbar_style,
 )
 from .plotting.font_presets import available_paper_fonts
+from .plotting.tick_intervals import interval_locator, parse_interval
 
 
 class FigureEditor:
@@ -560,6 +561,8 @@ class FigureEditor:
                            ("边框线宽", "linewidth")):
             fields[key] = self._entry(body, label, f"{original[key]:.4g}")
         label = self._entry(body, "色棒标签", original["label"])
+        step = original.get("tick_interval")
+        tick_interval = self._entry(body, "主刻度间隔（空=自动）", "" if step is None else f"{step:g}")
         family = self._font_entry(body, original["font_family"])
         color = self._color_entry(body, original["color"])
         all_bars = tk.BooleanVar(value=False)
@@ -590,6 +593,7 @@ class FigureEditor:
                 if not 5 <= values["label_size"] <= 72 or not 5 <= values["tick_size"] <= 72 or not 0 <= values["linewidth"] <= 10:
                     raise ValueError("色棒字号或线宽超出范围")
                 values.update(label=label.get(), font_family=family.get(), color=self._valid_color(color.get()))
+                values["tick_interval"] = parse_interval(tick_interval.get())
             except ValueError as exc:
                 messagebox.showerror("参数无效", str(exc), parent=window)
                 return False
@@ -675,13 +679,17 @@ class FigureEditor:
         x1 = self._entry(body, "横轴右边界", f"{xlim[1]:g}")
         y0 = self._entry(body, "纵轴下边界", f"{ylim[0]:g}")
         y1 = self._entry(body, "纵轴上边界", f"{ylim[1]:g}")
+        x_locator, y_locator = axis.xaxis.get_major_locator(), axis.yaxis.get_major_locator()
+        x_step, y_step = getattr(x_locator, "step", None), getattr(y_locator, "step", None)
+        x_interval = self._entry(body, "横轴主刻度间隔", "" if x_step is None else f"{x_step:g}")
+        y_interval = self._entry(body, "纵轴主刻度间隔", "" if y_step is None else f"{y_step:g}")
         tick_labels = axis.xaxis.get_ticklabels() or axis.yaxis.get_ticklabels()
         current_tick_size = tick_labels[0].get_fontsize() if tick_labels else 8
         original = {
             "xlim": tuple(xlim), "ylim": tuple(ylim),
             "xscale": axis.get_xscale(), "yscale": axis.get_yscale(),
             "tick_size": current_tick_size,
-            "tick_color": tick_labels[0].get_color() if tick_labels else "#1e293b",
+            "tick_color": tick_labels[0].get_color() if tick_labels else "black",
             "tick_font_family": tick_labels[0].get_fontfamily()[0] if tick_labels else "Arial",
             "x_spine_color": to_hex(axis.spines["bottom"].get_edgecolor()),
             "y_spine_color": to_hex(self._y_spine(axis).get_edgecolor()),
@@ -704,6 +712,8 @@ class FigureEditor:
                 xx = (float(x0.get()), float(x1.get()))
                 yy = (float(y0.get()), float(y1.get()))
                 tick = float(tick_size.get())
+                x_spacing = parse_interval(x_interval.get())
+                y_spacing = parse_interval(y_interval.get())
                 if not all(map(math.isfinite, (*xx, *yy, tick))):
                     raise ValueError("边界和字号必须是有限数值")
                 if xx[0] == xx[1] or yy[0] == yy[1]:
@@ -724,6 +734,8 @@ class FigureEditor:
             axis.set_yscale(yscale.get())
             axis.set_xlim(*xx)
             axis.set_ylim(*yy)
+            axis.xaxis.set_major_locator(interval_locator(axis.xaxis, x_spacing))
+            axis.yaxis.set_major_locator(interval_locator(axis.yaxis, y_spacing))
             axis.tick_params(axis="both", labelsize=tick, colors=color)
             set_tick_font_family(axis, tick_family.get())
             axis.spines["bottom"].set_color(x_line_color)
@@ -737,6 +749,8 @@ class FigureEditor:
                 "xscale": axis.get_xscale(), "yscale": axis.get_yscale(),
                 "tick_size": float(tick_size.get()), "tick_color": tick_color.get(),
                 "tick_font_family": tick_family.get(),
+                "x_tick_interval": parse_interval(x_interval.get()),
+                "y_tick_interval": parse_interval(y_interval.get()),
                 "x_spine_color": x_spine_color.get(),
                 "y_spine_color": y_spine_color.get(),
             }
@@ -750,6 +764,8 @@ class FigureEditor:
             axis.set_yscale(original["yscale"])
             axis.set_xlim(*original["xlim"])
             axis.set_ylim(*original["ylim"])
+            axis.xaxis.set_major_locator(x_locator)
+            axis.yaxis.set_major_locator(y_locator)
             axis.tick_params(axis="both", labelsize=original["tick_size"],
                              colors=original["tick_color"])
             set_tick_font_family(axis, original["tick_font_family"])

@@ -94,7 +94,7 @@ def make_material_figure(options, structures, labels):
         axis.xaxis.label.set_visible(visibility.get("x", True))
         axis.yaxis.label.set_visible(visibility.get("y", True))
         axis.set_title(labels[file_index], fontsize=9, color="#183b56", pad=7)
-        axis.tick_params(direction="in", labelsize=8, colors="#52687a")
+        axis.tick_params(direction="in", labelsize=8, colors="black")
         axis.grid(options.get("grid", False))
         apply_material_legend(axis, {})
     for axis in list(axes.flat)[len(panels):]:
