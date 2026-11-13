@@ -11,7 +11,7 @@ from matplotlib.colors import LinearSegmentedColormap, LogNorm, Normalize, SymLo
 from matplotlib.cm import ScalarMappable
 from matplotlib.ticker import SymmetricalLogLocator
 from .field_catalog import FIELDS as ADDITIONAL_FIELDS, DISPLAY_ORDER as ADDITIONAL_ORDER
-from .font_presets import available_paper_fonts
+from .font_presets import COLORBAR_LABEL_SIZE, COLORBAR_TICK_SIZE, available_paper_fonts
 
 
 # Renderer defaults. The desktop interface supplies data paths and plot settings.
@@ -111,7 +111,7 @@ FIELD_DISPLAY_ORDER = (115, *ADDITIONAL_ORDER, *FIELD_DISPLAY_ORDER[1:])
 LABELS = {
     "electron": r"Electron current density $|J_e|$ (A/cm$^2$)",
     "hole": r"Hole current density $|J_h|$ (A/cm$^2$)",
-    "total": r"Total current density $|J_{total}|$ (A/cm$^2$)",
+    "total": "Total current density |J| (A/cm²)",
     "temperature": "Lattice temperature (K)",
 }
 
@@ -163,7 +163,7 @@ def read_structure(path: Path) -> Structure:
     coordinates: dict[int, tuple[float, float]] = {}
     triangles_by_node: list[tuple[int, int, int]] = []
     triangle_regions: list[int] = []
-    node_fields: dict[int, list[float]] = {}
+    node_fields: dict[int, str] = {}
     codes: list[int] | None = None
     electrodes: dict[str, int] = {}
     current_region: int | None = None
@@ -184,9 +184,9 @@ def read_structure(path: Path) -> Structure:
                 if len(codes) != int(parts[1]):
                     raise ValueError(f"{path}: s 记录字段数不一致")
             elif line.startswith("n "):
-                parts = line.split()
+                parts = line.split(maxsplit=3)
                 # n 节点编号 材料编号 <s 记录对应的全部数值>
-                node_fields[int(parts[1])] = [float(x) for x in parts[3:]]
+                node_fields[int(parts[1])] = parts[3] if len(parts) == 4 else ""
             elif line.startswith("r "):
                 current_region = int(line.split()[1])
                 region_materials[current_region] = int(line.split()[2])
@@ -201,19 +201,12 @@ def read_structure(path: Path) -> Structure:
     id_to_index = {node_id: index for index, node_id in enumerate(node_ids)}
     xy = np.array([coordinates[node_id] for node_id in node_ids], dtype=float)
     code_index = {code: index for index, code in enumerate(codes)}
-    values: dict[str, np.ndarray] = {}
-    for name, code in FIELD_CODES.items():
-        if code not in code_index:
-            continue
-        column = code_index[code]
-        # SSF 的 c/t 节点编号从 1 开始，n 记录从 0 开始。
-        values[name] = np.array(
-            [node_fields[node_id - 1][column] for node_id in node_ids], dtype=float
-        )
-    for code, column in code_index.items():
-        values[f"code:{code}"] = np.array(
-            [node_fields[node_id - 1][column] for node_id in node_ids], dtype=float
-        )
+    # SSF c/t nodes are one-based; n records are zero-based.
+    rows = (node_fields[node_id - 1] for node_id in node_ids)
+    columns = np.ascontiguousarray(np.loadtxt(rows, usecols=range(len(codes)), ndmin=2).T)
+    values = {f"code:{code}": columns[column] for code, column in code_index.items()}
+    values.update({name: values[f"code:{code}"] for name, code in FIELD_CODES.items()
+                   if code in code_index})
 
     triangles = np.array(
         [[id_to_index[node_id] for node_id in triangle] for triangle in triangles_by_node],
@@ -296,6 +289,19 @@ def mirror_structure(structure: Structure, axis_x: float) -> Structure:
     )
 
 
+def mesh_edges(triangles, node_count, *, boundary_only=False):
+    edges = np.sort(np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]],
+                                    triangles[:, [2, 0]])), axis=1)
+    # A single integer per edge sorts faster than pairs of integer records.
+    keys = edges[:, 0].astype(np.int64) * node_count + edges[:, 1]
+    if boundary_only:
+        keys, counts = np.unique(keys, return_counts=True)
+        keys = keys[counts == 1]
+    else:
+        keys = np.unique(keys)
+    return np.column_stack(np.divmod(keys, node_count))
+
+
 def plot_region(ax, structure: Structure, region_id: int, color: str | None,
                 rotated: bool = True, outline: bool = True) -> None:
     """按 .str 原始三角形填充材料，并画出该区域的外轮廓。"""
@@ -310,26 +316,19 @@ def plot_region(ax, structure: Structure, region_id: int, color: str | None,
         ))
     if not outline:
         return
-    edges = np.sort(
-        np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]])),
-        axis=1,
-    )
-    unique_edges, counts = np.unique(edges, axis=0, return_counts=True)
-    outline = unique_edges[counts == 1]
+    outline = mesh_edges(triangles, len(xy), boundary_only=True)
     ax.add_collection(LineCollection(xy[outline], colors="#303030", linewidths=0.65, zorder=3))
 
 
 def plot_mesh(ax, structure: Structure, rotated=False):
-    triangles = structure.triangles
-    edges = np.unique(np.sort(np.concatenate((triangles[:, [0, 1]], triangles[:, [1, 2]],
-                                             triangles[:, [2, 0]])), axis=1), axis=0)
+    edges = mesh_edges(structure.triangles, structure.x.size)
     xy = np.column_stack((structure.y, structure.x)) if rotated else np.column_stack((structure.x, structure.y))
     ax.add_collection(LineCollection(xy[edges], colors="#334155", linewidths=0.25,
                                      alpha=0.55, zorder=4, rasterized=True))
 
 
-def color_norm(structures: list[Structure], quantity: str, bounds: tuple[float, ...]):
-    """同一物理量的全部时间点共用色标，且只按当前显示区域统计。"""
+def visible_field_values(structures: list[Structure], quantity: str, bounds: tuple[float, ...]):
+    """Collect finite values from mesh nodes inside the plotting bounds."""
     x0, x1, y0, y1 = bounds
     selected = []
     for structure in structures:
@@ -345,6 +344,12 @@ def color_norm(structures: list[Structure], quantity: str, bounds: tuple[float, 
     all_values = np.concatenate(selected)
     if all_values.size == 0:
         raise ValueError(f"{quantity}: 当前视野没有有效节点")
+    return all_values
+
+
+def color_norm(structures: list[Structure], quantity: str, bounds: tuple[float, ...]):
+    """同一物理量的全部时间点共用色标，且只按当前显示区域统计。"""
+    all_values = visible_field_values(structures, quantity, bounds)
 
     if quantity.startswith("code:") or quantity not in ("electron", "hole", "total", "temperature"):
         lower = float(np.min(all_values))
@@ -438,6 +443,7 @@ def add_colorbar(figure, image, **kwargs):
     if RENDER_STYLE == "fine_contour":
         image = ScalarMappable(norm=image.norm, cmap=image.cmap)
     bar = figure.colorbar(image, **kwargs)
+    bar.ax.tick_params(labelsize=COLORBAR_TICK_SIZE, colors="black")
     if isinstance(image.norm, SymLogNorm):
         bar.locator = SpacedSymLogLocator(image.norm)
         bar.update_ticks()
@@ -445,6 +451,8 @@ def add_colorbar(figure, image, **kwargs):
     available = available_paper_fonts()
     family = next((font for font in ("Arial", "Helvetica", "DejaVu Sans") if font in available), "sans-serif")
     axis = bar.ax.yaxis if bar.orientation == "vertical" else bar.ax.xaxis
+    axis.label.set_fontsize(COLORBAR_LABEL_SIZE)
+    axis.get_offset_text().set_fontsize(COLORBAR_TICK_SIZE)
     for label in [axis.label, axis.get_offset_text(), *axis.get_ticklabels(which="both")]:
         label.set_fontfamily(family)
     return bar

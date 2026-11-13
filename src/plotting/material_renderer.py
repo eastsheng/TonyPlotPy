@@ -6,6 +6,7 @@ from matplotlib import colormaps
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
 from . import atlas_engine as engine
+from .font_presets import AXIS_LABEL_SIZE, AXIS_TICK_SIZE, TITLE_SIZE
 from .structure_overlay import draw_structure_info
 
 
@@ -62,6 +63,7 @@ def make_material_figure(options, structures, labels):
         raise ValueError("图尺寸必须大于 0")
     rows = math.ceil(len(panels) / columns)
     figure = Figure(figsize=(width * columns, height * rows), constrained_layout=True)
+    figure._tonyplot_export_size = tuple(figure.get_size_inches())
     axes = figure.subplots(rows, columns, squeeze=False)
     rotated = options["orientation"].startswith("横向")
     x0, x1, y0, y1 = options["bounds"]
@@ -88,16 +90,16 @@ def make_material_figure(options, structures, labels):
         axis.set_ylim((x0, x1) if rotated else (y1, structure_y0))
         draw_structure_info(axis, structure, rotated=rotated, junctions=options["overlay"],
                             labels=options.get("structure_labels", True))
-        axis.set_xlabel("Depth y (µm)" if rotated else "x (µm)")
-        axis.set_ylabel("Lateral x (µm)" if rotated else "Depth y (µm)")
+        axis.set_xlabel("Depth y (µm)" if rotated else "x (µm)", fontsize=AXIS_LABEL_SIZE)
+        axis.set_ylabel("Lateral x (µm)" if rotated else "Depth y (µm)", fontsize=AXIS_LABEL_SIZE)
         visibility = options.get("panel_labels", {}).get((str(options["files"][file_index]), "materials"), {})
         axis.xaxis.label.set_visible(visibility.get("x", True))
         axis.yaxis.label.set_visible(visibility.get("y", True))
-        axis.set_title(labels[file_index], fontsize=9, color="#183b56", pad=7)
-        axis.tick_params(direction="in", labelsize=8, colors="black")
+        axis.set_title(labels[file_index], fontsize=TITLE_SIZE, color="#183b56", pad=7)
+        axis.tick_params(direction="in", labelsize=AXIS_TICK_SIZE, colors="black")
         axis.grid(options.get("grid", False))
         apply_material_legend(axis, {})
     for axis in list(axes.flat)[len(panels):]:
         axis.set_visible(False)
-    figure.suptitle(options["files"][0].parent.name, fontsize=12, color="#183b56")
+    figure.suptitle(options["files"][0].parent.name, fontsize=TITLE_SIZE, color="#183b56")
     return figure

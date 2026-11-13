@@ -4,6 +4,12 @@
 
 TonyPlotPy is a desktop application for Atlas ASCII `.str` cloud maps and Atlas SSF `.log` curves. The STR workflow builds on `plot_switching_str_cloud_maps_on.py` and supports mesh parsing, field mapping validation, cell mirroring, structure overlays, TonyPlot colormaps, and three rendering methods.
 
+## Install on Windows
+
+Run `TonyPlotPy-Setup-0.4.2-x64.exe` to install for the current user. Launch TonyPlotPy from the Start menu or uninstall it from Windows Settings. The installer includes Python and the plotting dependencies. MP4 export requires FFmpeg on `PATH`.
+
+To rebuild the installer, use 64-bit Python, install the dependencies in `requirements.txt`, PyInstaller, and Inno Setup 6, then run `powershell -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1`. The installer is written to `installer-output`.
+
 ## Run
 
 **Save set** on either tab saves file order, selected fields/curves, plot parameters, current axis view limits, text/curve/colorbar/arrow edits, and material-legend positions in a TonyPlotPy `.set` file. **Load set** reads the source data in the background and restores the active plot. Data paths are relative where possible; preserve the relative folder layout when moving files. This JSON format does not embed simulation data and is distinct from TonyPlot's native `.set/.setx`. Reproduction requires the original data, fonts, and a compatible software version. Existing double-click editors are also accessible through **Edit this element…** in the right-click menu; active zoom/pan tools retain priority.
@@ -33,6 +39,8 @@ Cloud maps use triangles and stored nodal values from every material region, inc
 
 Panel titles show only time or file labels by default. Quantity names remain on the colorbars. Enable **Show quantity in panel titles** to include quantity names in panel titles as well.
 
+Under **Current flow**, toggle total-current-density streamlines, blue electron current arrows, and magenta hole current arrows independently. Set the density and arrow length (3–24 pt, default 9 pt). The length setting also scales streamline arrowheads. The STR file must contain both current-density components for each enabled overlay. These options carry over to plot configurations, animations, and exports.
+
 Selecting two or more of electron, hole, and total current density uses one shared current-density colorbar. These maps use the global current colormap, scale, limits, and contour bands; automatic limits cover all selected current quantities. Individual overrides are replaced by the global settings in this case. Temperature and other quantities retain separate colorbars.
 
 Double-click a colorbar, its label, or ticks to edit its length, width, horizontal/vertical offset (inches), label text, label/tick font sizes, font, color, and outline width. **Apply size and style to all colorbars** gives them matching dimensions while retaining their own labels. Preview, cancel/restore, and confirm/save are supported; edits persist through plotting and export.
@@ -45,7 +53,7 @@ Only explicitly named nodal fields found in every selected file are listed. Curr
 
 Current density magnitude combines the X and Y components as `|J| = √(Jx² + Jy²)`. Fields ending in X or Y are directional components. The parser uses Atlas 5.30 field numbers and validates current magnitudes against components. Binary `.str` files are not supported.
 
-**Custom grid columns** is the number of panels in each row. Changing it selects **Custom grid** automatically; click **Plot / update preview** to apply it. Combined maps share colorbars by quantity to reduce clutter.
+Under **View and layout**, choose **Side by side** for one row or **Stacked vertically** for one column. Panels for the same quantity stay together and follow the file list. Click **Plot / update preview** to apply. Importing an older `.set` restores its saved layout.
 
 ## LOG curves
 

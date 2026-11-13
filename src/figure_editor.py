@@ -12,7 +12,7 @@ from matplotlib.text import Annotation
 from .plotting.figure_edits import (
     add_arrow, apply_line_style, refresh_legend, set_tick_font_family, apply_colorbar_style,
 )
-from .plotting.font_presets import available_paper_fonts
+from .plotting.font_presets import AXIS_TICK_SIZE, COLORBAR_TICK_SIZE, available_paper_fonts
 from .plotting.tick_intervals import interval_locator, parse_interval
 
 
@@ -543,7 +543,7 @@ class FigureEditor:
                 "width": box.width * width, "height": box.height * height,
                 "dx": 0., "dy": 0., "label": item.get_ylabel(),
                 "label_size": item.yaxis.label.get_fontsize(),
-                "tick_size": ticks[0].get_fontsize() if ticks else 8,
+                "tick_size": ticks[0].get_fontsize() if ticks else COLORBAR_TICK_SIZE,
                 "font_family": item.yaxis.label.get_fontfamily()[0],
                 "color": to_hex(item.yaxis.label.get_color()),
                 "linewidth": item._colorbar.outline.get_linewidth(),
@@ -684,7 +684,7 @@ class FigureEditor:
         x_interval = self._entry(body, "横轴主刻度间隔", "" if x_step is None else f"{x_step:g}")
         y_interval = self._entry(body, "纵轴主刻度间隔", "" if y_step is None else f"{y_step:g}")
         tick_labels = axis.xaxis.get_ticklabels() or axis.yaxis.get_ticklabels()
-        current_tick_size = tick_labels[0].get_fontsize() if tick_labels else 8
+        current_tick_size = tick_labels[0].get_fontsize() if tick_labels else AXIS_TICK_SIZE
         original = {
             "xlim": tuple(xlim), "ylim": tuple(ylim),
             "xscale": axis.get_xscale(), "yscale": axis.get_yscale(),
@@ -849,6 +849,7 @@ class FigureEditor:
         window, body = self._dialog("编辑图片尺寸")
         width, height = getattr(self.figure, "_tonyplot_export_size", self.figure.get_size_inches())
         preview_size = tuple(self.figure.get_size_inches())
+        preview_dpi = self.figure.dpi
         original_export_size = getattr(self.figure, "_tonyplot_export_size", None)
         tr = self.root.tr if hasattr(self.root, "tr") else str
         modes = ("宽高比例", "毫米 (mm)", "像素 (px)")
@@ -919,6 +920,7 @@ class FigureEditor:
 
         def rollback():
             self.figure.set_size_inches(*preview_size, forward=False)
+            self.figure.set_dpi(preview_dpi)
             if original_export_size is None:
                 if hasattr(self.figure, "_tonyplot_export_size"):
                     del self.figure._tonyplot_export_size

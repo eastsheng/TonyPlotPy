@@ -7,6 +7,7 @@ import matplotlib as mpl
 import numpy as np
 from matplotlib.figure import Figure
 
+from .font_presets import AXIS_LABEL_SIZE, AXIS_TICK_SIZE, TITLE_SIZE
 from .log_reader import LogData, read_log
 
 
@@ -20,9 +21,9 @@ mpl.rcParams.update({
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
     "font.size": 8,
-    "axes.labelsize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
+    "axes.labelsize": AXIS_LABEL_SIZE,
+    "xtick.labelsize": AXIS_TICK_SIZE,
+    "ytick.labelsize": AXIS_TICK_SIZE,
     "xtick.color": "black",
     "ytick.color": "black",
     "legend.fontsize": 7.5,
@@ -176,7 +177,7 @@ def make_figure(options: dict, cache: dict) -> Figure:
                 spine.set_linewidth(0.8)
         if panels > 1:
             ax.set_title(labels.get(panel_codes[0], "Signal"),
-                         fontsize=9, pad=4)
+                         fontsize=TITLE_SIZE, pad=4)
         ax.minorticks_on()
         ax.tick_params(axis="both", which="major", direction="in", length=4, width=0.8, pad=3)
         ax.tick_params(axis="both", which="minor", direction="in", length=2, width=0.6)
@@ -195,7 +196,7 @@ def make_figure(options: dict, cache: dict) -> Figure:
     for ax in list(axes.flat)[panels:]:
         ax.set_visible(False)
     if options.get("title"):
-        figure.suptitle(options["title"], fontsize=9)
+        figure.suptitle(options["title"], fontsize=TITLE_SIZE)
     figure.tight_layout(pad=0.5)
     figure._tonyplot_export_size = tuple(figure.get_size_inches())
     return figure

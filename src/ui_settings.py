@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 
 SETTINGS_FILE = Path(__file__).resolve().parent.parent / "settings.json"
+if getattr(sys, "frozen", False):
+    user_data = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    SETTINGS_FILE = user_data / "TonyPlotPy" / "settings.json"
 THEMES = {
     "蓝色": {"bg": "#f4f7fb", "border": "#dbe4ef", "accent": "#2563eb",
              "hover": "#1d4ed8", "soft": "#edf4ff", "tab": "#e8eff8",
@@ -53,4 +58,5 @@ def load_settings() -> dict:
 
 
 def save_settings(values: dict) -> None:
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(values, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

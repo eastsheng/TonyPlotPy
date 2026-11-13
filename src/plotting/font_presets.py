@@ -4,6 +4,13 @@ from __future__ import annotations
 from matplotlib import font_manager
 
 
+AXIS_TICK_SIZE = 18
+AXIS_LABEL_SIZE = 20
+TITLE_SIZE = 18
+COLORBAR_TICK_SIZE = 15
+COLORBAR_LABEL_SIZE = 16
+
+
 PAPER_FONTS = (
     "Arial", "Helvetica", "Times New Roman", "Cambria", "Calibri",
     "DejaVu Sans", "DejaVu Serif", "Liberation Sans", "Liberation Serif",

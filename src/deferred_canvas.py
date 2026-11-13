@@ -33,10 +33,10 @@ class DeferredFigureCanvasTkAgg(FigureCanvasTkAgg):
         )
 
     def _fit_preview(self, width, height):
-        size = self.figure._tonyplot_export_size
-        scale = min(max(1, width) / (size[0] * self.figure.dpi),
-                    max(1, height) / (size[1] * self.figure.dpi))
-        self.figure.set_size_inches(size[0] * scale, size[1] * scale, forward=False)
+        figure_width, figure_height = self.figure._tonyplot_export_size
+        # Scale the whole preview, including typography and gaps between panels.
+        self.figure.set_size_inches(figure_width, figure_height, forward=False)
+        self.figure.set_dpi(min(max(1, width) / figure_width, max(1, height) / figure_height))
 
     def set_preview_size(self, size):
         self.figure._tonyplot_export_size = tuple(size)

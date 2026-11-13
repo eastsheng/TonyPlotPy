@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import math
+import json
 import gc
 import copy
+import ctypes
 import queue
+import sys
 import threading
 import re
 from pathlib import Path
@@ -19,7 +22,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 
 from .plotting import atlas_engine as engine
 from .plotting import renderer
-from .plotting.axis_breaks import parse_breaks
+from .plotting.current_flow import DEFAULT_ARROW_LENGTH, DENSITIES as FLOW_DENSITIES
 from .plotting import log_reader, log_renderer
 from .plotting.figure_edits import apply_edits
 from .plotting.export_diagnostics import quiet_export
@@ -32,10 +35,13 @@ from .version import APP_VERSION
 from .i18n import translate, LocalizedStringVar
 from .view_switcher import ViewSwitcher
 from .plot_config import save_config, load_config
-from .str_animation import render_frames, build_animation_panel, save_animation
+from .str_animation import render_frames, build_animation_panel, save_animation, colorbar_fields, colorbar_mode
+from .plotting.temperature_segments import parse_frame_ranges, parse_segments
 
 
 QUANTITIES = ("electron", "hole", "total", "temperature")
+FLOW_CONTROLS = {"current_streamlines": "总电流密度流线", "electron_direction": "电子电流方向",
+                 "hole_direction": "空穴电流方向"}
 DEFAULT_FIELD_CODES = {engine.FIELD_CODES[q] for q in QUANTITIES}
 FIELD_NAME_BY_CODE = engine.FIELD_UI_LABELS_BY_CODE
 BG = "#f4f7fb"
@@ -85,6 +91,7 @@ class TonyPlotApp(tk.Tk):
         self.busy = False
         self.gc_was_enabled = False
         self.render_results = queue.Queue()
+        self.animation_progress = queue.SimpleQueue()
         self.file_load_ids = {"str": 0, "log": 0}
         self.file_loading = set()
         self.str_headers = {}
@@ -597,11 +604,8 @@ class TonyPlotApp(tk.Tk):
         view = self._section(controls, "视图与组合")
         self._check(view, "仅显示材料（不绘制云图）", "materials_only", False)
         self._combo(view, "方向", "orientation", "纵向（x 横轴）", ("纵向（x 横轴）", "横向（深度横轴）"))
-        self._combo(view, "排列", "layout", "物理量 × 时间", ("物理量 × 时间", "时间 × 物理量", "自由网格"))
-        self._entry(view, "自由网格列数", "columns", 3)
-        ttk.Label(view, text="每行放几个子图；修改后自动切换为自由网格", foreground=MUTED,
-                  wraplength=245).pack(anchor="w", pady=(0, 4))
-        self.vars["columns"].trace_add("write", self._on_columns_changed)
+        self._combo(view, "排列", "layout", renderer.STACKED, renderer.PANEL_LAYOUTS)
+        self.var("columns", 3)  # Saved grid width in legacy .set files.
         for q, label in (("electron", "电子电流密度（幅值）"),
                          ("hole", "空穴电流密度（幅值）"),
                          ("total", "总电流密度（幅值）"),
@@ -639,7 +643,13 @@ class TonyPlotApp(tk.Tk):
         self._entry(view, "x 最小值", "x0", 0)
         self._entry(view, "x 最大值", "x1", 9.5)
         self._entry(view, "深度最小值", "y0", 0)
-        self._entry(view, "深度最大值", "y1", 25)
+        self._entry(view, "深度最大值（空=模型最大深度）", "y1", "")
+
+        flow = self._section(controls, "电流流线与方向")
+        for key, label in FLOW_CONTROLS.items():
+            self._check(flow, label, key, False)
+        self._combo(flow, "流线与箭头密度", "flow_density", "标准", tuple(FLOW_DENSITIES))
+        self._entry(flow, "箭头长度 (pt)", "flow_arrow_length", DEFAULT_ARROW_LENGTH)
 
         breaks = self._section(controls, "坐标轴截断")
         for axis in ("x", "y"):
@@ -677,8 +687,9 @@ class TonyPlotApp(tk.Tk):
         self.plot_area.pack(fill="both", expand=True)
         self.animation_area = ttk.Frame(right)
         self.animation_exporting = False
-        self.show_animation_frames, self.current_animation_figure, self.animation_snapshot = build_animation_panel(
-            self, self.animation_area, lambda request: self._start_render("str", animation=request))
+        (self.show_animation_frames, self.current_animation_figure, self.animation_snapshot,
+         self.update_animation_progress) = build_animation_panel(
+             self, self.animation_area, lambda request: self._start_render("str", animation=request))
         self.notebook.bind("<<NotebookTabChanged>>", self._switch_str_workspace, add="+")
         self.bind_class("LeftSettingsScroll", "<MouseWheel>", self._scroll_left)
         self._install_scroll_tag(left_outer)
@@ -824,9 +835,6 @@ class TonyPlotApp(tk.Tk):
         widget.bindtags((tag,) + widget.bindtags())
         for child in widget.winfo_children():
             self._install_scroll_tag(child, tag)
-
-    def _on_columns_changed(self, *_):
-        self.vars["layout"].set("自由网格")
 
     def _build_log_ui(self, page):
         paned = ttk.PanedWindow(page, orient="horizontal")
@@ -1024,11 +1032,25 @@ class TonyPlotApp(tk.Tk):
             try:
                 for kind in ("str", "log"):
                     self.checkpoint_edit(kind)
+                for key in FLOW_CONTROLS:
+                    if key not in state["vars"]:
+                        self.vars[key].set(False)
+                if "flow_density" not in state["vars"]:
+                    self.vars["flow_density"].set("标准")
+                if "flow_arrow_length" not in state["vars"]:
+                    self.vars["flow_arrow_length"].set(DEFAULT_ARROW_LENGTH)
+                for key in ("animation_temperature_interval", "animation_temperature_limits"):
+                    if key not in state["vars"]:
+                        self.vars[key].set("")
+                self.vars["animation_temperature_frame_ranges"].set("[]")
+                self.vars["animation_temperature_per_frame"].set(False)
+                self.vars["animation_colorbar_rules"].set("{}")
+                self.vars["layout"].set(renderer.STACKED)
+                self.vars["columns"].set(3)
+                self.vars["y1"].set("")
                 for key, value in state["vars"].items():
-                    if key in self.vars and key != "layout":
+                    if key in self.vars:
                         self.vars[key].set(value)
-                if "layout" in state["vars"]:
-                    self.vars["layout"].set(state["vars"]["layout"])
                 for key, value in state["quantities"].items():
                     if key in self.quantity_vars:
                         self.quantity_vars[key].set(value)
@@ -1551,12 +1573,13 @@ class TonyPlotApp(tk.Tk):
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
         self.tooltips.register_tree(dialog)
 
+    def selected_str_quantities(self):
+        return ([q for q in QUANTITIES if self.quantity_vars[q].get()]
+                + [self._extra_field_id(self.extra_field_codes[index]) for index in self.field_list.curselection()])
+
     def settings(self):
         options = {key: variable.get() for key, variable in self.vars.items()}
-        options["quantities"] = [q for q in QUANTITIES if self.quantity_vars[q].get()]
-        options["quantities"].extend(
-            self._extra_field_id(self.extra_field_codes[index]) for index in self.field_list.curselection()
-        )
+        options["quantities"] = self.selected_str_quantities()
         options["field_settings"] = {key: value.copy() for key, value in self.field_settings.items()}
         options["panel_labels"] = copy.deepcopy(self.panel_labels)
         options["files"] = list(self.files)
@@ -1569,13 +1592,13 @@ class TonyPlotApp(tk.Tk):
         # A zero lower bound is useful for linear plots. In log mode the
         # renderer interprets it as automatic positive lower bound.
         options["bounds"] = self._str_bounds(options)
-        options["axis_breaks"] = parse_breaks(options, options["bounds"])
         return options
 
     @staticmethod
     def _str_bounds(options):
-        x0, x1, y0, y1 = (float(options[key]) for key in ("x0", "x1", "y0", "y1"))
-        if x1 <= x0 or y1 <= y0:
+        x0, x1, y0 = (float(options[key]) for key in ("x0", "x1", "y0"))
+        y1 = renderer.optional_float(options["y1"])
+        if x1 <= x0 or (y1 is not None and y1 <= y0):
             raise ValueError("显示范围的最大值必须大于最小值")
         if options["mirror"] and math.isclose(x1, float(options["mirror_x"])):
             x1 = 2 * x1 - x0
@@ -1602,7 +1625,31 @@ class TonyPlotApp(tk.Tk):
                     raise ValueError("动态云图至少需要两个 STR 文件")
                 if options.get("materials_only"):
                     raise ValueError("请关闭仅显示材料并选择云图物理量")
+                interval = options["animation_temperature_interval"].strip()
+                rules = json.loads(options["animation_colorbar_rules"])
+                active_rules = {}
+                for key in colorbar_fields(options["quantities"]):
+                    if key in rules:
+                        mode = colorbar_mode(rules[key])
+                        ranges = parse_frame_ranges(rules[key]["ranges"], signed=True) if mode == "manual" else []
+                        if any(start >= len(options["files"]) for start, _, _, _ in ranges):
+                            raise ValueError("起始帧超出所选文件范围。")
+                        active_rules[key] = {"mode": mode, "fixed": rules[key].get("fixed"), "ranges": ranges}
+                animation["colorbar_rules"] = active_rules
+                if "temperature" in active_rules:
+                    pass
+                elif "temperature" in options["quantities"] and options["animation_temperature_per_frame"]:
+                    animation["temperature_per_frame"] = True
+                elif "temperature" in options["quantities"]:
+                    ranges = parse_frame_ranges(json.loads(options["animation_temperature_frame_ranges"]))
+                    if ranges:
+                        if any(start >= len(options["files"]) for start, _, _, _ in ranges):
+                            raise ValueError("起始帧超出所选文件范围。")
+                        animation["temperature_frame_ranges"] = ranges
+                    elif interval:
+                        animation["temperature_segments"] = parse_segments(interval, options["animation_temperature_limits"])
                 options["animation"] = animation
+                self.update_animation_progress("reading", 0, len(options["files"]))
             options["kind"] = kind
             options["visual_edits"] = copy.deepcopy(self.figure_edits[kind])
             if kind == "log":
@@ -1621,12 +1668,19 @@ class TonyPlotApp(tk.Tk):
             self.after(100, self._poll_render)
         except Exception as exc:
             if self.gc_was_enabled: gc.enable()
-            messagebox.showerror(self.tr("绘图失败"), self.tr(str(exc)))
+            if animation:
+                self.update_animation_progress()
+            self._render_failed(str(exc), kind)
 
     def _render_worker(self, options):
         try:
             if options.get("animation"):
-                frames = render_frames(options, self.cache)
+                if sys.platform == "win32":
+                    # Give the Tk thread priority while this worker renders frames.
+                    kernel = ctypes.windll.kernel32
+                    kernel.GetCurrentThread.restype = ctypes.c_void_p
+                    kernel.SetThreadPriority(ctypes.c_void_p(kernel.GetCurrentThread()), -1)
+                frames = render_frames(options, self.cache, report_progress=self._report_animation_progress)
                 self.render_results.put((frames, None, options, None))
                 return
             if options["kind"] == "str":
@@ -1654,13 +1708,26 @@ class TonyPlotApp(tk.Tk):
         except Exception as exc:
             self.render_results.put((None, None, options, str(exc)))
 
+    def _report_animation_progress(self, stage, done, total):
+        self.animation_progress.put((stage, done, total))
+
     def _poll_render(self):
+        latest = None
+        while not self.animation_progress.empty():
+            latest = self.animation_progress.get_nowait()
+        if latest is not None:
+            self.update_animation_progress(*latest)
         try:
             figure, renderer, options, error = self.render_results.get_nowait()
         except queue.Empty:
             if self.busy: self.after(100, self._poll_render)
             return
         try:
+            if options.get("animation"):
+                # The worker may have queued its last update just before the result.
+                while not self.animation_progress.empty():
+                    self.animation_progress.get_nowait()
+                self.update_animation_progress()
             if error: self._render_failed(error, options["kind"] if options else self._active_kind())
             elif options.get("animation"):
                 self.busy = False
@@ -1682,7 +1749,8 @@ class TonyPlotApp(tk.Tk):
                 self._show_figure(figure, renderer, options)
         finally:
             if self.gc_was_enabled: gc.enable()
-            gc.collect()
+            if not options.get("animation"):
+                gc.collect()
 
     def _show_figure(self, figure, renderer, options):
         kind = options["kind"]

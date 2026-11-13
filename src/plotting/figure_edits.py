@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from matplotlib.transforms import Bbox
 from matplotlib.layout_engine import ConstrainedLayoutEngine
+from matplotlib.mathtext import MathTextParser
 from .tick_intervals import interval_locator
 
 
@@ -37,6 +38,17 @@ class ColorbarLocator:
                                 box.y0 + box.height / 2 - h / 2 + dy / height, w, h)
 
 
+def colorbar_label_uses_math(label):
+    if "$" not in label:
+        return False
+    try:
+        MathTextParser("agg").parse(label)
+    except ValueError:
+        # A malformed label in a saved plot should still be editable.
+        return False
+    return True
+
+
 def apply_colorbar_style(axis, values):
     locator = axis.get_axes_locator()
     base = locator.base if isinstance(locator, ColorbarLocator) else locator
@@ -45,8 +57,12 @@ def apply_colorbar_style(axis, values):
     axis.set_box_aspect(None)
     axis.set_aspect("auto")
     axis.set_axes_locator(ColorbarLocator(base, values.copy()))
-    axis.set_ylabel(values["label"], fontsize=values["label_size"],
-                    color=values["color"], fontfamily=values["font_family"])
+    label = " ".join(values["label"].splitlines())
+    if label in (r"Total current density $|J_{total}|$ (A/cm$^2$)",
+                 r"Total current density $J_{total}|$ (A/cm$^2$)"):
+        label = "Total current density |J| (A/cm²)"
+    axis.set_ylabel(label, fontsize=values["label_size"], color=values["color"],
+                    fontfamily=values["font_family"], parse_math=colorbar_label_uses_math(label))
     bar = axis._colorbar
     bar.locator = interval_locator(axis.yaxis, values.get("tick_interval"), bar.locator)
     bar.update_ticks()
