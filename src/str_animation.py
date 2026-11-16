@@ -127,12 +127,9 @@ def editable_frame(root, parent, frame, arrow_button, sync):
 
 def ordered_snapshots(paths):
     def sort_key(path):
-        try:
-            seconds = float(path.stem.lower().rsplit("_tr_", 1)[1])
-            if math.isfinite(seconds):
-                return 1, seconds
-        except (IndexError, ValueError):
-            pass
+        seconds = renderer.engine.snapshot_seconds(path)
+        if seconds is not None:
+            return 1, seconds
         if re.search(r"(?:^|[_-])(?:init|initial)(?:$|[_-])", path.stem, re.IGNORECASE):
             return 0, 0
         return 2, 0
@@ -158,7 +155,7 @@ def render_frames(options, cache, *, export_dpi=None, edits_by_path=None, report
         prepared[path] = renderer.read_structure(path, options, cache)
         if report_progress is not None:
             report_progress("reading", index, len(paths))
-    options = renderer.resolve_depth(options, prepared.values())
+    options = renderer.resolve_bounds(options, prepared.values())
     norms, frames = {}, []
     axes_positions = None
     segment_limits_cache = {}

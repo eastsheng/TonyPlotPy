@@ -85,9 +85,8 @@ def make_material_figure(options, structures, labels):
             used[name] = color
         if options.get("mesh", False):
             engine.plot_mesh(axis, structure, rotated=rotated)
-        structure_y0 = min(y0, float(structure.y.min())) if options["overlay"] else y0
-        axis.set_xlim((structure_y0, y1) if rotated else (x0, x1))
-        axis.set_ylim((x0, x1) if rotated else (y1, structure_y0))
+        axis.set_xlim((y0, y1) if rotated else (x0, x1))
+        axis.set_ylim((x0, x1) if rotated else (y1, y0))
         draw_structure_info(axis, structure, rotated=rotated, junctions=options["overlay"],
                             labels=options.get("structure_labels", True))
         axis.set_xlabel("Depth y (µm)" if rotated else "x (µm)", fontsize=AXIS_LABEL_SIZE)

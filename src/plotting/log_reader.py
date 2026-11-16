@@ -25,6 +25,7 @@ def read_header(path: Path) -> LogHeader:
     """Read the p column declaration and available named signals."""
     outputs: dict[int, str] = {}
     labels: dict[int, str] = {}
+    electrodes = []
     with path.open("r", encoding="latin-1", errors="replace") as source:
         for line in source:
             if line.startswith("o "):
@@ -35,6 +36,8 @@ def read_header(path: Path) -> LogHeader:
                 match = re.match(r'Q\s+(\d+)\s+\d+\s+"([^"]+)"', line)
                 if match:
                     labels[int(match.group(1))] = match.group(2)
+            elif line.startswith("f "):
+                electrodes = re.findall(r'"([^"]+)"', line)
             elif line.startswith("p "):
                 parts = line.split()
                 codes = tuple(map(int, parts[2:]))
@@ -44,6 +47,9 @@ def read_header(path: Path) -> LogHeader:
                     labels[61] = "Time (s)"
                 for index, name in outputs.items():
                     labels.setdefault(2999 + index, name)
+                for index, name in enumerate(electrodes):
+                    labels.setdefault(20 + index, f"{name} current (A/µm)")
+                labels.setdefault(82, "Maximum lattice temperature (K)")
                 labels = {code: label for code, label in labels.items() if code in codes}
                 return LogHeader(codes, labels)
     raise ValueError(f"{path.name}: 缺少 Atlas SSF 的 p 记录；可能是运行控制台日志")

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
+import re
 
 import numpy as np
 from matplotlib.collections import LineCollection, PolyCollection
@@ -128,8 +130,19 @@ class Structure:
     region_materials: dict[int, int] = field(default_factory=dict)
 
 
+class BinaryStructureError(ValueError):
+    """The file has a binary header rather than an ASCII SSF header."""
+
+
+def check_structure_format(path: Path):
+    with path.open("rb") as source:
+        if b"\x00" in source.read(128):
+            raise BinaryStructureError(f"{path.name}: 二进制 STR，请用 ATLAS 另存为 ASCII SSF 结构文件。")
+
+
 def list_field_codes(path: Path) -> tuple[int, ...]:
     """Read only the ASCII STR field header, without loading the mesh."""
+    check_structure_format(path)
     with path.open("r", encoding="latin-1") as source:
         for line in source:
             if line.startswith("s "):
@@ -141,6 +154,18 @@ def list_field_codes(path: Path) -> tuple[int, ...]:
     raise ValueError(f"{path}: 未找到 s 字段记录，可能不是 ASCII .str")
 
 
+def snapshot_seconds(path: Path):
+    match = re.search(r"_(?:tr|step)_([^_]+)$", path.stem, re.IGNORECASE)
+    if match:
+        try:
+            seconds = float(match[1])
+            if math.isfinite(seconds):
+                return seconds
+        except ValueError:
+            pass
+    return None
+
+
 def snapshot_info(file_name: str) -> tuple[Path, str, str]:
     """返回路径、图题和输出标签；非瞬态文件也能直接绘制。"""
     path = Path(file_name).expanduser()
@@ -149,11 +174,11 @@ def snapshot_info(file_name: str) -> tuple[Path, str, str]:
     if not path.is_file():
         raise FileNotFoundError(f"结构文件不存在：{path}")
     tag = path.stem
-    try:
-        seconds = float(tag.rsplit("_tr_", 1)[1])
-        label = f"t = {seconds * 1e6:g} µs"
+    seconds = snapshot_seconds(path)
+    if seconds is not None:
+        label = f"t = {seconds * 1e9:g} ns" if 0 < abs(seconds) < 1e-6 else f"t = {seconds * 1e6:g} µs"
         tag = f"t{seconds * 1e6:g}".replace(".", "p") + "us"
-    except (ValueError, IndexError):
+    else:
         label = tag
     return path, label, tag
 
@@ -169,6 +194,7 @@ def read_structure(path: Path) -> Structure:
     current_region: int | None = None
     region_materials = {}
 
+    check_structure_format(path)
     with path.open("r", encoding="latin-1") as source:
         for line in source:
             if line.startswith("c "):
@@ -212,19 +238,17 @@ def read_structure(path: Path) -> Structure:
         [[id_to_index[node_id] for node_id in triangle] for triangle in triangles_by_node],
         dtype=int,
     )
-    # Retain every material region for field rendering. Region 1 is used only
-    # for the original current-component consistency check below.
+    # Retain every material region for field rendering.
     region_ids = np.array(triangle_regions, dtype=int)
     region_triangles = {
         region_id: triangles[region_ids == region_id]
         for region_id in np.unique(region_ids)
     }
-    silicon_carbide = region_triangles.get(1, np.empty((0, 3), dtype=int))
-    if silicon_carbide.size == 0:
-        silicon_carbide = triangles
+    semiconductor = [mesh for region, mesh in region_triangles.items()
+                     if region_materials.get(region) in {3, 8, 99, 102, 103, 124, 126}]
 
     # 核验字段编号：幅值必须与对应方向分量的模一致。
-    sic_nodes = np.unique(silicon_carbide)
+    nodes = np.unique(np.concatenate(semiconductor) if semiconductor else triangles)
     for magnitude, x_name, y_name in (
         ("electron", "electron_x", "electron_y"),
         ("hole", "hole_x", "hole_y"),
@@ -233,8 +257,8 @@ def read_structure(path: Path) -> Structure:
     ):
         if not all(name in values for name in (magnitude, x_name, y_name)):
             continue
-        expected = np.hypot(values[x_name][sic_nodes], values[y_name][sic_nodes])
-        actual = values[magnitude][sic_nodes]
+        expected = np.hypot(values[x_name][nodes], values[y_name][nodes])
+        actual = values[magnitude][nodes]
         if not np.allclose(actual, expected, rtol=2e-3, atol=1e-5):
             raise ValueError(
                 f"{path}: {magnitude} 与 x/y 分量不符；请核对 .str 字段映射"
@@ -248,12 +272,37 @@ def read_structure(path: Path) -> Structure:
     )
 
 
+def infer_mirror_axis(structure: Structure, reference: float | None):
+    """Infer a unique edge from saved normal components or a reference edge."""
+    left, right = float(structure.x.min()), float(structure.x.max())
+    for field in ("code:120", "total_x", "conduction_x"):
+        if field not in structure.values:
+            continue
+        values = np.abs(structure.values[field])
+        finite = values[np.isfinite(values)]
+        if not finite.size or not finite.max():
+            continue
+        tolerance = finite.max() * 1e-6
+        edges = [values[np.isclose(structure.x, edge, rtol=0, atol=1e-8)] for edge in (left, right)]
+        if any(len(edge) < 3 or not np.isfinite(edge).all() for edge in edges):
+            continue
+        maxima = [float(edge.max()) for edge in edges]
+        if min(maxima) <= tolerance and max(maxima) >= 100 * tolerance:
+            return (left, right)[int(maxima[1] < maxima[0])]
+    if reference is not None:
+        for edge in (left, right):
+            if math.isclose(edge, reference, rel_tol=0, abs_tol=1e-8):
+                return edge
+    return None
+
+
 def mirror_structure(structure: Structure, axis_x: float) -> Structure:
     """把半胞的原始 x 坐标和所有节点场量映射到对称的另一半。"""
-    if structure.x.min() < -1e-8 or structure.x.max() > axis_x + 1e-8:
+    if not any(math.isclose(float(edge), axis_x, rel_tol=0, abs_tol=1e-8)
+               for edge in (structure.x.min(), structure.x.max())):
         raise ValueError(
             f"输入结构的 x 范围为 {structure.x.min():g}–{structure.x.max():g} µm，"
-            f"不能按半胞 x={axis_x:g} µm 镜像；请关闭镜像选项"
+            f"镜像轴 x={axis_x:g} µm 必须位于模型左边界或右边界。"
         )
     old_count = structure.x.size
     seam = np.isclose(structure.x, axis_x, rtol=0, atol=1e-8)
@@ -279,7 +328,7 @@ def mirror_structure(structure: Structure, axis_x: float) -> Structure:
                 value,
                 -value[reflected_sources]
                 if name in {"electron_x", "hole_x", "conduction_x", "total_x",
-                             "code:220", "code:221", "code:524", "code:222"}
+                             "code:220", "code:221", "code:524", "code:222", "code:120"}
                 else value[reflected_sources],
             ))
             for name, value in structure.values.items()

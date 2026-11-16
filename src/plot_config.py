@@ -44,8 +44,8 @@ def remap_paths(value, mapping):
 def save_config(path, state):
     path = Path(path)
     mapping = {}
-    for kind in ("str", "log"):
-        for filename in state["files"][kind]:
+    for paths in state["files"].values():
+        for filename in paths:
             try:
                 mapping[filename] = os.path.relpath(filename, path.parent)
             except ValueError:
@@ -72,7 +72,7 @@ def load_config(path):
                 state["extra_fields"] = ["absolute_net_doping" if code == 115 else code
                                          for code in state["extra_fields"]]
     mapping = {}
-    for kind in ("str", "log"):
-        for filename in state["files"][kind]:
+    for paths in state["files"].values():
+        for filename in paths:
             mapping[filename] = str((path.parent / filename).resolve())
     return remap_paths(state, mapping)

@@ -71,7 +71,10 @@ class TonyPlotApp(tk.Tk):
         self.header_title_labels = []
         self._apply_app_icon()
         self._setup_style()
-        self.files: list[Path] = []
+        self._str_workspace = "str"
+        self._str_files: dict[str, list[Path]] = {"str": [], "animation": []}
+        self._str_headers = {"str": {}, "animation": {}}
+        self._str_selected = {"str": set(), "animation": set()}
         self.cache: dict[tuple[Path, int], engine.Structure] = {}
         self.figure = None
         self.canvas_widget = None
@@ -92,9 +95,8 @@ class TonyPlotApp(tk.Tk):
         self.gc_was_enabled = False
         self.render_results = queue.Queue()
         self.animation_progress = queue.SimpleQueue()
-        self.file_load_ids = {"str": 0, "log": 0}
+        self.file_load_ids = {"str": 0, "animation": 0, "log": 0}
         self.file_loading = set()
-        self.str_headers = {}
         self.log_headers = {}
         self._pending_set_curve = None
         self.vars: dict[str, tk.Variable] = {}
@@ -633,6 +635,7 @@ class TonyPlotApp(tk.Tk):
         ttk.Button(field_actions, text="清除字段选择", command=self.clear_extra_fields).pack(side="left")
         ttk.Label(view, text="Ctrl+单击可取消单项；双击设置显示参数", foreground=MUTED).pack(anchor="w")
         self._check(view, "镜像为完整单胞", "mirror", True)
+        self._combo(view, "镜像轴选择", "mirror_mode", renderer.MIRROR_MODES[0], renderer.MIRROR_MODES)
         self._entry(view, "镜像轴 x (µm)", "mirror_x", 9.5)
         self._check(view, "显示结构与结线", "overlay", True)
         self._check(view, "显示结构标注（材料图）", "structure_labels", True)
@@ -640,9 +643,9 @@ class TonyPlotApp(tk.Tk):
         self._check(view, "显示三角网格", "mesh", False)
         self._check(view, "显示物理量标题", "show_quantity_title", False)
         ttk.Button(view, text="子图轴标签…", command=self.open_panel_labels).pack(anchor="w", pady=4)
-        self._entry(view, "x 最小值", "x0", 0)
-        self._entry(view, "x 最大值", "x1", 9.5)
-        self._entry(view, "深度最小值", "y0", 0)
+        self._entry(view, "x 最小值（空=自动）", "x0", "")
+        self._entry(view, "x 最大值（空=自动）", "x1", "")
+        self._entry(view, "深度最小值（空=自动）", "y0", "")
         self._entry(view, "深度最大值（空=模型最大深度）", "y1", "")
 
         flow = self._section(controls, "电流流线与方向")
@@ -704,6 +707,16 @@ class TonyPlotApp(tk.Tk):
             self.str_paned.place_forget()
             return
         animated = page == str(self.animation_page)
+        workspace = "animation" if animated else "str"
+        if workspace != self._str_workspace:
+            self._str_selected[self._str_workspace] = {
+                self.files[index] for index in self.file_list.curselection()
+            }
+            self._str_workspace = workspace
+            self.refresh_files()
+            for index, path in enumerate(self.files):
+                if path in self._str_selected[workspace]:
+                    self.file_list.selection_set(index)
         self.str_paned.place(in_=self.animation_page if animated else self.str_page,
                              relwidth=1, relheight=1)
         self.str_paned.lift()
@@ -958,7 +971,8 @@ class TonyPlotApp(tk.Tk):
         if self.log_rendered and self.log_preview_combo.current() >= 0:
             current_curve = self.log_rendered[self.log_preview_combo.current()][0]
         state = {"active": self._active_kind(),
-                "files": {"str": [str(path) for path in self.files],
+                "files": {"str": [str(path) for path in self._str_files["str"]],
+                          "animation": [str(path) for path in self._str_files["animation"]],
                           "log": [str(path) for path in self.log_files]},
                 "vars": {key: value.get() for key, value in self.vars.items()},
                 "quantities": {key: value.get() for key, value in self.quantity_vars.items()},
@@ -1024,6 +1038,8 @@ class TonyPlotApp(tk.Tk):
                 if not isinstance(state[key], dict):
                     raise ValueError("Invalid configuration section: " + key)
             files = {kind: [Path(name) for name in state["files"][kind]] for kind in ("str", "log")}
+            if "animation" in state["files"]:
+                files["animation"] = [Path(name) for name in state["files"]["animation"]]
         except (OSError, ValueError, KeyError, TypeError) as exc:
             messagebox.showerror(self.tr("配置导入失败"), str(exc), parent=self)
             return
@@ -1046,14 +1062,21 @@ class TonyPlotApp(tk.Tk):
                 self.vars["animation_temperature_per_frame"].set(False)
                 self.vars["animation_colorbar_rules"].set("{}")
                 self.vars["layout"].set(renderer.STACKED)
+                self.vars["mirror_mode"].set(renderer.MIRROR_MODES[0])
                 self.vars["columns"].set(3)
-                self.vars["y1"].set("")
+                for key in ("x0", "x1", "y0", "y1"):
+                    self.vars[key].set("")
                 for key, value in state["vars"].items():
                     if key in self.vars:
+                        if key == "layout":
+                            value = {"时间 × 物理量": renderer.FILES_AS_ROWS,
+                                     "物理量 × 时间": renderer.FILES_AS_COLUMNS}.get(value, value)
                         self.vars[key].set(value)
                 for key, value in state["quantities"].items():
                     if key in self.quantity_vars:
                         self.quantity_vars[key].set(value)
+                self.notebook.select(self.str_page if state["active"] == "str" else self.log_page)
+                self._switch_str_workspace()
                 self.field_list.selection_clear(0, "end")
                 for index, code in enumerate(self.extra_field_codes):
                     if code in state.get("extra_fields", []):
@@ -1081,17 +1104,16 @@ class TonyPlotApp(tk.Tk):
                         item["str_view"] = saved_view
                 self.log_single_edits = state["log_single_edits"]
                 self._pending_set_curve = state.get("log_curve")
-                if self.files:
-                    self.directory_var.set(str(self.files[0].parent))
+                if self._str_files["str"]:
+                    self.directory_var.set(str(self._str_files["str"][0].parent))
                 if self.log_files:
                     self.log_directory_var.set(str(self.log_files[0].parent))
-                self.notebook.select(self.str_page if state["active"] == "str" else self.log_page)
                 if files[state["active"]]:
                     self._start_render(state["active"])
             except (ValueError, KeyError, TypeError, tk.TclError) as exc:
                 messagebox.showerror(self.tr("配置导入失败"), str(exc), parent=self)
 
-        self._queue_file_read(("str", "log"), additions=files, on_complete=restore, strict=True)
+        self._queue_file_read(tuple(files), additions=files, on_complete=restore, strict=True)
 
     def choose_directory(self):
         folder = filedialog.askdirectory(initialdir=self.directory_var.get() or str(Path.home()))
@@ -1143,7 +1165,8 @@ class TonyPlotApp(tk.Tk):
             self.file_load_ids[kind] += 1
             tokens[kind] = self.file_load_ids[kind]
             self.file_loading.add(kind)
-            (self.status if kind == "str" else self.log_status).set("正在后台扫描文件和读取字段…")
+            if kind in ("log", self._str_workspace):
+                (self.log_status if kind == "log" else self.status).set("正在后台扫描文件和读取字段…")
         results = queue.Queue()
 
         def worker():
@@ -1153,18 +1176,24 @@ class TonyPlotApp(tk.Tk):
                     raise ValueError(self.tr("目录无效") + ": " + str(folder or ""))
                 batches = {}
                 for kind in kinds:
-                    paths = sorted(directory.glob(f"*.{kind}")) if additions is None else additions[kind]
+                    suffix = ".log" if kind == "log" else ".str"
+                    paths = (sorted(path for path in directory.iterdir()
+                                    if path.suffix.casefold() == suffix and path.is_file())
+                             if additions is None else additions[kind])
                     paths = list(dict.fromkeys(paths))
-                    headers, invalid = {}, []
+                    headers, invalid, binary = {}, [], []
                     for path in paths:
                         if tokens[kind] != self.file_load_ids[kind]:
                             break
                         try:
-                            headers[path] = (engine.list_field_codes(path) if kind == "str"
+                            headers[path] = (engine.list_field_codes(path) if kind != "log"
                                              else log_reader.read_header(path))
+                        except engine.BinaryStructureError as exc:
+                            binary.append(path.name)
+                            invalid.append(str(exc))
                         except (OSError, ValueError):
                             invalid.append(path.name)
-                    batches[kind] = (list(headers), headers, invalid)
+                    batches[kind] = (list(headers), headers, invalid, binary)
                     if strict and invalid:
                         raise ValueError("配置引用的数据文件无法读取：\n" + "\n".join(invalid))
                 results.put((batches, None))
@@ -1184,13 +1213,17 @@ class TonyPlotApp(tk.Tk):
                     continue
                 self.file_loading.discard(kind)
                 if error:
-                    (self.status if kind == "str" else self.log_status).set(error)
+                    (self.log_status if kind == "log" else self.status).set(error)
                     continue
-                paths, headers, invalid = batches[kind]
-                if kind == "str":
-                    self.files = paths
-                    self.str_headers = headers
-                    self.refresh_files()
+                paths, headers, invalid, binary = batches[kind]
+                if kind != "log":
+                    self._str_files[kind] = paths
+                    self._str_headers[kind] = headers
+                    if kind == self._str_workspace:
+                        self.refresh_files()
+                    if binary and kind == self._str_workspace:
+                        self.status.set(self.tr("已加载 {loaded} 个 STR；{skipped} 个二进制 STR 需用 ATLAS 另存为 ASCII SSF。").format(
+                            loaded=len(paths), skipped=len(binary)))
                 else:
                     self.log_files = paths
                     self.log_headers = headers
@@ -1209,7 +1242,7 @@ class TonyPlotApp(tk.Tk):
         folder = self.log_directory_var.get().strip()
         if sync:
             self.directory_var.set(folder)
-        self._queue_file_read(("str", "log") if sync else ("log",), folder=folder)
+        self._queue_file_read((self._str_workspace, "log") if sync else ("log",), folder=folder)
 
     def add_log_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas LOG", "*.log"), ("All files", "*.*")])
@@ -1351,12 +1384,22 @@ class TonyPlotApp(tk.Tk):
         folder = self.directory_var.get().strip()
         if sync:
             self.log_directory_var.set(folder)
-        self._queue_file_read(("str", "log") if sync else ("str",), folder=folder)
+        workspace = self._str_workspace
+        self._queue_file_read((workspace, "log") if sync else (workspace,), folder=folder)
 
     def add_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas STR", "*.str"), ("All files", "*.*")])
         if paths:
-            self._queue_file_read(("str",), additions={"str": [*self.files, *map(Path, paths)]})
+            workspace = self._str_workspace
+            self._queue_file_read((workspace,), additions={workspace: [*self.files, *map(Path, paths)]})
+
+    @property
+    def files(self):
+        return self._str_files[self._str_workspace]
+
+    @property
+    def str_headers(self):
+        return self._str_headers[self._str_workspace]
 
     def refresh_files(self):
         self.file_list.delete(0, "end")
@@ -1448,8 +1491,12 @@ class TonyPlotApp(tk.Tk):
                 ttk.Entry(row, textvariable=variable, width=24).pack(side="left")
         ttk.Label(body, text=self.tr("留空的数值使用全局设置或自动范围"), foreground=MUTED).pack(anchor="w", pady=(8, 4))
         buttons = ttk.Frame(body); buttons.pack(fill="x", pady=(8, 0))
+        preview_area = ttk.Frame(dialog, width=440, height=360)
+        preview_area.pack_propagate(False)
 
-        def save():
+        def update_field(preview_only):
+            if self.busy or self.animation_exporting or self._str_workspace in self.file_loading:
+                return
             data = {key: ("默认" if var.get() == self.tr("默认") else var.get().strip())
                     for key, var in edits.items()}
             try:
@@ -1457,6 +1504,8 @@ class TonyPlotApp(tk.Tk):
                     raise ValueError("净掺杂对数阈值必须大于 0")
                 lower = optional_float(data["vmin"])
                 upper = optional_float(data["vmax"])
+                if any(value is not None and not math.isfinite(value) for value in (lower, upper)):
+                    raise ValueError("上下限必须为有限数值。")
                 if lower is not None and upper is not None and upper <= lower:
                     raise ValueError("上限必须大于下限")
                 if data["bands"] and int(data["bands"]) < 2:
@@ -1464,25 +1513,67 @@ class TonyPlotApp(tk.Tk):
             except ValueError as exc:
                 messagebox.showerror(self.tr("参数无效"), self.tr(str(exc)), parent=dialog)
                 return
-            self.checkpoint_edit("str")
-            self.field_settings[field] = data
-            dialog.destroy()
+            if not self.files and not preview_only:
+                self.checkpoint_edit("str")
+                self.field_settings[field] = data
+                dialog.destroy()
+                return
+            if not self.files:
+                messagebox.showerror(self.tr("参数无效"), self.tr("请先添加 STR 文件。"), parent=dialog)
+                return
+
+            def finished(figure, error):
+                preview_button.state(["!disabled"])
+                apply_button.state(["!disabled"])
+                if error:
+                    messagebox.showerror(self.tr("绘图失败"), self.tr(error), parent=dialog)
+                elif preview_only:
+                    for child in preview_area.winfo_children():
+                        child.destroy()
+                    preview_area.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+                    canvas = DeferredFigureCanvasTkAgg(figure, master=preview_area)
+                    widget = canvas.get_tk_widget()
+                    widget.pack(fill="both", expand=True)
+                    widget.bind("<Destroy>", lambda _event: canvas.cancel_pending_resize(), add="+")
+                    canvas.draw_idle()
+                else:
+                    self.checkpoint_edit("str")
+                    self.field_settings[field] = data
+                    dialog.destroy()
+                    if self.notebook.select() == str(self.animation_page):
+                        self.status.set("参数已应用，请更新动画预览。")
+                    else:
+                        self.preview()
+
+            preview_button.state(["disabled"])
+            apply_button.state(["disabled"])
+            self._start_render("str", field_preview=(field, data, dialog, finished))
 
         ttk.Button(buttons, text=self.tr("取消"), command=dialog.destroy).pack(side="right")
-        ttk.Button(buttons, text=self.tr("应用"), command=save, style="Accent.TButton").pack(side="right", padx=8)
-        dialog.bind("<Return>", lambda event: save())
+        apply_button = ttk.Button(buttons, text=self.tr("应用"), command=lambda: update_field(False), style="Accent.TButton")
+        apply_button.pack(side="right", padx=8)
+        preview_button = ttk.Button(buttons, text=self.tr("预览"), command=lambda: update_field(True))
+        preview_button.pack(side="right")
+        dialog.bind("<Return>", lambda event: update_field(False))
         dialog.bind("<Escape>", lambda event: dialog.destroy())
         self.tooltips.register_tree(dialog)
         dialog.wait_visibility()
         dialog.focus_set()
 
     def remove_files(self):
-        for index in reversed(self.file_list.curselection()): self.files.pop(index)
+        selected = self.file_list.curselection()
+        if not selected:
+            return
+        self._cancel_str_file_read()
+        for index in reversed(selected): self.files.pop(index)
         self.refresh_files()
 
+    def _cancel_str_file_read(self):
+        self.file_load_ids[self._str_workspace] += 1
+        self.file_loading.discard(self._str_workspace)
+
     def clear_files(self):
-        self.file_load_ids["str"] += 1
-        self.file_loading.discard("str")
+        self._cancel_str_file_read()
         self.files.clear(); self.refresh_files()
 
     def clear_extra_fields(self):
@@ -1491,7 +1582,8 @@ class TonyPlotApp(tk.Tk):
     def keep_selected(self):
         selected = self.file_list.curselection()
         if not selected: return
-        self.files = [self.files[index] for index in selected]
+        self._cancel_str_file_read()
+        self.files[:] = [self.files[index] for index in selected]
         self.refresh_files()
 
     def move_file(self, direction):
@@ -1499,6 +1591,7 @@ class TonyPlotApp(tk.Tk):
         if len(selected) != 1: return
         index = selected[0]; dest = index + direction
         if not 0 <= dest < len(self.files): return
+        self._cancel_str_file_read()
         self.files[index], self.files[dest] = self.files[dest], self.files[index]
         self.refresh_files(); self.file_list.selection_set(dest)
 
@@ -1577,14 +1670,21 @@ class TonyPlotApp(tk.Tk):
         return ([q for q in QUANTITIES if self.quantity_vars[q].get()]
                 + [self._extra_field_id(self.extra_field_codes[index]) for index in self.field_list.curselection()])
 
-    def settings(self):
+    def settings(self, files=None):
         options = {key: variable.get() for key, variable in self.vars.items()}
         options["quantities"] = self.selected_str_quantities()
         options["field_settings"] = {key: value.copy() for key, value in self.field_settings.items()}
         options["panel_labels"] = copy.deepcopy(self.panel_labels)
-        options["files"] = list(self.files)
+        options["files"] = list(self.files if files is None else files)
         if options.get("materials_only", False):
             options["quantities"] = ["materials"]
+        elif options["quantities"] == ["total", "temperature"]:
+            headers = [self.str_headers.get(path) for path in options["files"]]
+            if headers and all(header is not None for header in headers):
+                shared = set(headers[0]).intersection(*headers[1:])
+                defaults = [q for q in options["quantities"] if engine.FIELD_CODES[q] in shared]
+                if defaults or 115 in shared:
+                    options["quantities"] = defaults or ["net_doping"]
         get = options.__getitem__
         quantities = options["quantities"]
         if not options["files"] or not quantities: raise ValueError("请选择至少一个 .str 文件和一个物理量")
@@ -1596,12 +1696,11 @@ class TonyPlotApp(tk.Tk):
 
     @staticmethod
     def _str_bounds(options):
-        x0, x1, y0 = (float(options[key]) for key in ("x0", "x1", "y0"))
-        y1 = renderer.optional_float(options["y1"])
-        if x1 <= x0 or (y1 is not None and y1 <= y0):
+        x0, x1, y0, y1 = (renderer.optional_float(options[key]) for key in ("x0", "x1", "y0", "y1"))
+        if any(value is not None and not math.isfinite(value) for value in (x0, x1, y0, y1)):
+            raise ValueError("显示范围必须为有限数值。")
+        if any(lo is not None and hi is not None and hi <= lo for lo, hi in ((x0, x1), (y0, y1))):
             raise ValueError("显示范围的最大值必须大于最小值")
-        if options["mirror"] and math.isclose(x1, float(options["mirror_x"])):
-            x1 = 2 * x1 - x0
         return x0, x1, y0, y1
 
     def preview(self):
@@ -1610,17 +1709,25 @@ class TonyPlotApp(tk.Tk):
     def preview_log(self):
         self._start_render("log")
 
-    def _start_render(self, kind, animation=None):
-        if kind in self.file_loading:
+    def _start_render(self, kind, animation=None, *, field_preview=None):
+        if (self._str_workspace if kind == "str" else kind) in self.file_loading:
             (self.status if kind == "str" else self.log_status).set("正在后台扫描文件和读取字段…")
             return
         if self.busy or self.animation_exporting: return
         try:
-            options = self.settings() if kind == "str" else self.settings_log()
+            selected = self.file_list.curselection() if animation else ()
+            files = [self.files[index] for index in selected] if selected else None
+            options = self.settings(files) if kind == "str" else self.settings_log()
+            if field_preview:
+                field, data, dialog, finished = field_preview
+                code = int(field[5:]) if field.startswith("code:") else engine.FIELD_CODES.get(field, 115)
+                path = next((path for path in options["files"]
+                             if code in self.str_headers.get(path, ())), options["files"][0])
+                options.update(files=[path], quantities=[field], materials_only=False,
+                               layout=renderer.STACKED, panel_width=4.4, panel_height=3.6,
+                               field_preview=(dialog, finished))
+                options["field_settings"][field] = data
             if animation:
-                selected = self.file_list.curselection()
-                if selected:
-                    options["files"] = [self.files[index] for index in selected]
                 if len(options["files"]) < 2:
                     raise ValueError("动态云图至少需要两个 STR 文件")
                 if options.get("materials_only"):
@@ -1670,7 +1777,13 @@ class TonyPlotApp(tk.Tk):
             if self.gc_was_enabled: gc.enable()
             if animation:
                 self.update_animation_progress()
-            self._render_failed(str(exc), kind)
+            if field_preview:
+                self.busy = False
+                for button in (self.draw_button, self.log_draw_button):
+                    button.configure(state="normal")
+                field_preview[-1](None, str(exc))
+            else:
+                self._render_failed(str(exc), kind)
 
     def _render_worker(self, options):
         try:
@@ -1728,7 +1841,15 @@ class TonyPlotApp(tk.Tk):
                 while not self.animation_progress.empty():
                     self.animation_progress.get_nowait()
                 self.update_animation_progress()
-            if error: self._render_failed(error, options["kind"] if options else self._active_kind())
+            if options.get("field_preview"):
+                self.busy = False
+                for button in (self.draw_button, self.log_draw_button):
+                    button.configure(state="normal")
+                dialog, finished = options["field_preview"]
+                self.status.set("绘图失败" if error else "预览完成")
+                if dialog.winfo_exists():
+                    self.after_idle(lambda: finished(figure, error) if dialog.winfo_exists() else None)
+            elif error: self._render_failed(error, options["kind"] if options else self._active_kind())
             elif options.get("animation"):
                 self.busy = False
                 for button in (self.draw_button, self.log_draw_button):

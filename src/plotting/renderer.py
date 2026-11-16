@@ -21,7 +21,10 @@ FIELD_NAME_BY_CODE = engine.FIELD_LABELS_BY_CODE
 DOPING_FIELDS = ("code:115", "net_doping", "absolute_net_doping")
 SIDE_BY_SIDE = "左右排列"
 STACKED = "上下排列"
-PANEL_LAYOUTS = (SIDE_BY_SIDE, STACKED)
+FILES_AS_ROWS = "每个文件一行，物理量分列"
+FILES_AS_COLUMNS = "每个文件一列，物理量分行"
+PANEL_LAYOUTS = (SIDE_BY_SIDE, STACKED, FILES_AS_ROWS, FILES_AS_COLUMNS)
+MIRROR_MODES = ("自动识别", "左边界", "右边界", "手动坐标")
 
 
 def quantity_label(quantity: str) -> str:
@@ -46,11 +49,17 @@ def str_view_ranges(bounds, orientation):
     return (y, x) if orientation.startswith("横向") else (x, y)
 
 
-def resolve_depth(options, structures):
+def resolve_bounds(options, structures):
     x0, x1, y0, y1 = options["bounds"]
+    if x0 is None:
+        x0 = min(float(structure.x.min()) for structure in structures)
+    if x1 is None:
+        x1 = max(float(structure.x.max()) for structure in structures)
+    if y0 is None:
+        y0 = min(float(structure.y.min()) for structure in structures)
     if y1 is None:
         y1 = max(float(structure.y.max()) for structure in structures)
-    if y1 <= y0:
+    if x1 <= x0 or y1 <= y0:
         raise ValueError("显示范围的最大值必须大于最小值")
     bounds = (x0, x1, y0, y1)
     return {**options, "bounds": bounds,
@@ -62,7 +71,7 @@ def panel_layout(options):
     count = len(options["files"])
     quantities = options["quantities"]
     layout = options.get("layout", STACKED)
-    if layout == "时间 × 物理量":
+    if layout in (FILES_AS_ROWS, "时间 × 物理量"):
         return [(i, q) for i in range(count) for q in quantities], len(quantities)
     # Keep panels that use the same colorbar adjacent.
     panels = [(i, q) for q in quantities for i in range(count)]
@@ -70,7 +79,7 @@ def panel_layout(options):
         return panels, len(panels)
     if layout == STACKED:
         return panels, 1
-    if layout == "物理量 × 时间":
+    if layout in (FILES_AS_COLUMNS, "物理量 × 时间"):
         return panels, count
     if layout == "自由网格":
         return panels, int(options.get("columns", 3))
@@ -86,7 +95,17 @@ def read_structure(path: Path, options: dict, cache: dict) -> engine.Structure:
         cache[key] = engine.read_structure(path)
     structure = cache[key]
     if options["mirror"]:
-        return engine.mirror_structure(structure, float(options["mirror_x"]))
+        mode = options.get("mirror_mode", MIRROR_MODES[0])
+        if mode == "左边界":
+            axis = float(structure.x.min())
+        elif mode == "右边界":
+            axis = float(structure.x.max())
+        elif mode == "手动坐标":
+            axis = float(options["mirror_x"])
+        else:
+            axis = engine.infer_mirror_axis(structure, optional_float(options["mirror_x"]))
+        if axis is not None:
+            return engine.mirror_structure(structure, axis)
     return structure
 
 
@@ -142,6 +161,8 @@ def field_norm(structures: list[engine.Structure], quantity: str, bounds: tuple,
         scale = "log" if isinstance(base, LogNorm) else "linear"
     lower = optional_float(overrides.get("vmin", ""))
     upper = optional_float(overrides.get("vmax", ""))
+    if scale == "log" and any(value is not None and value <= 0 for value in (lower, upper)):
+        raise ValueError("对数色棒上下限必须大于 0。")
     if upper is None:
         upper = base.vmax
     if lower is None:
@@ -185,8 +206,14 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
     quantities, files = options["quantities"], options["files"]
     structures = [read_structure(path, options, cache) if prepared is None else prepared[path]
                   for path in files]
-    options = resolve_depth(options, structures)
+    options = resolve_bounds(options, structures)
     bounds = options["bounds"]
+    if not options.get("materials_only"):
+        for path, structure in zip(files, structures):
+            for quantity in quantities:
+                source = "code:115" if quantity == "absolute_net_doping" else quantity
+                if source not in structure.values:
+                    raise ValueError(f"{path.name}: 未保存 {quantity_label(quantity)}，请选择包含该物理量的文件。")
     labels = [engine.snapshot_info(str(path))[1] for path in files]
     if options.get("materials_only", False):
         from .material_renderer import make_material_figure
@@ -220,11 +247,11 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
     ystyle = options.get("y_break_style", "闪电线")
     x0, x1, y0, y1 = bounds
     if rotated:
-        xlim, ylim = (y0 - (1.25 if overlay else 0), y1), (x0, x1)
+        xlim, ylim = (y0, y1), (x0, x1)
         xcut, ycut = cuts.get("y"), cuts.get("x")
         xstyle, ystyle = ystyle, xstyle
     else:
-        xlim, ylim = (x0, x1), (y1, y0 - (2.6 if overlay else 0))
+        xlim, ylim = (x0, x1), (y1, y0)
         xcut, ycut = cuts.get("x"), cuts.get("y")
     if cuts:
         cells = panel_cells(figure, rows, columns, len(panels), xlim, ylim, xcut, ycut)
