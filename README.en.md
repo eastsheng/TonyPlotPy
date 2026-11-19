@@ -8,7 +8,13 @@ TonyPlotPy is a desktop application for Atlas ASCII `.str` cloud maps and Atlas 
 
 Run `TonyPlotPy-Setup-0.4.2-x64.exe` to install for the current user. Launch TonyPlotPy from the Start menu or uninstall it from Windows Settings. The installer includes Python and the plotting dependencies. MP4 export requires FFmpeg on `PATH`.
 
-To rebuild the installer, use 64-bit Python, install the dependencies in `requirements.txt`, PyInstaller, and Inno Setup 6, then run `powershell -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1`. The installer is written to `installer-output`.
+To build manually, install 64-bit Windows Python with the `py` launcher and Inno Setup 6. From the project directory, run the following command to install the runtime and build dependencies and create the installer.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1 -InstallDependencies
+```
+
+For subsequent builds, double-click `src/packaging/build-installer.bat`. The window displays the result and waits for a keypress. You can also omit `-InstallDependencies` from the command to reuse installed dependencies. The script reads the version from `src/version.py` and writes the installer to `installer-output`. For a custom Inno Setup location, append `-IsccPath "installation-folder\ISCC.exe"`. MP4 export uses FFmpeg from the runtime environment.
 
 ## Run
 

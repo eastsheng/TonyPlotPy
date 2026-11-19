@@ -1,4 +1,7 @@
-param([string]$IsccPath)
+param(
+    [string]$IsccPath,
+    [switch]$InstallDependencies
+)
 
 $ErrorActionPreference = 'Stop'
 $project = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -18,6 +21,13 @@ $IsccPath = (Resolve-Path -LiteralPath $IsccPath).Path
 
 Push-Location $project
 try {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { throw 'Install 64-bit Python with the Python Launcher (py).' }
+    if ($InstallDependencies) {
+        py -m pip install -r requirements.txt 'Pillow>=9' 'PyInstaller>=6,<7'
+        if ($LASTEXITCODE -ne 0) { throw 'Installing build dependencies failed.' }
+    }
+    py -c 'import PyInstaller, numpy, matplotlib, PIL, tkinter; from src.app import TonyPlotApp'
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency or startup check failed. Fix the error above, or rerun with -InstallDependencies.' }
     $version = py -c 'from src.version import APP_VERSION; print(APP_VERSION)'
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Cannot read APP_VERSION.' }
     py -c 'import sys; assert sys.maxsize > 2**32'
@@ -37,6 +47,7 @@ try {
     & $IsccPath "/DAppVersion=$version" "/DProjectDir=$project" "/DBundleDir=$build\dist\TonyPlotPy" `
         "/O$output" (Join-Path $PSScriptRoot 'TonyPlotPy.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed.' }
+    Write-Host 'Installer ready:' -ForegroundColor Green
     Get-Item -LiteralPath (Join-Path $output "TonyPlotPy-Setup-$version-x64.exe")
 } finally {
     Pop-Location

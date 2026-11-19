@@ -75,6 +75,7 @@ class TonyPlotApp(tk.Tk):
         self._str_files: dict[str, list[Path]] = {"str": [], "animation": []}
         self._str_headers = {"str": {}, "animation": {}}
         self._str_selected = {"str": set(), "animation": set()}
+        self._str_directories = {"str": "", "animation": ""}
         self.cache: dict[tuple[Path, int], engine.Structure] = {}
         self.figure = None
         self.canvas_widget = None
@@ -426,6 +427,7 @@ class TonyPlotApp(tk.Tk):
         entry = ttk.Entry(row, textvariable=self.var(key, default), width=width)
         self._layout_parameter_row(row, caption, entry)
         self.control_hints.extend(((caption, hint_for(key, label)), (entry, hint_for(key, label))))
+        return entry
 
     def _combo(self, parent, label, key, default, options):
         row = ttk.Frame(parent)
@@ -590,11 +592,19 @@ class TonyPlotApp(tk.Tk):
         self.directory_var = tk.StringVar()
         self.directory_entry = ttk.Entry(files, textvariable=self.directory_var)
         self.directory_entry.pack(fill="x")
-        self.file_list = tk.Listbox(files, selectmode="extended", height=7, exportselection=False,
+        file_rows = ttk.Frame(files)
+        file_rows.pack(fill="x")
+        self.file_list = tk.Listbox(file_rows, selectmode="extended", height=7, exportselection=False,
                                     bg=SURFACE, fg=INK, selectbackground=ACCENT,
                                     selectforeground=SURFACE, relief="flat", borderwidth=1,
                                     highlightthickness=1, highlightbackground=BORDER)
-        self.file_list.pack(fill="x")
+        file_scrollbar = ttk.Scrollbar(file_rows, orient="vertical", command=self.file_list.yview)
+        file_scrollbar.pack(side="right", fill="y")
+        self.file_list.configure(yscrollcommand=file_scrollbar.set)
+        self.file_list.pack(side="left", fill="x", expand=True)
+        self.str_file_menu = tk.Menu(self, tearoff=False)
+        self.str_file_menu.add_command(label="刷新并加载新文件", command=self.refresh_str_directory)
+        self.file_list.bind("<Button-3>", self._str_file_context_menu)
         row = ttk.Frame(files); row.pack(fill="x", pady=4)
         buttons = []
         for label, action in (("移除", self.remove_files), ("上移", lambda: self.move_file(-1)), ("下移", lambda: self.move_file(1)), ("清空", self.clear_files)):
@@ -636,7 +646,9 @@ class TonyPlotApp(tk.Tk):
         ttk.Label(view, text="Ctrl+单击可取消单项；双击设置显示参数", foreground=MUTED).pack(anchor="w")
         self._check(view, "镜像为完整单胞", "mirror", True)
         self._combo(view, "镜像轴选择", "mirror_mode", renderer.MIRROR_MODES[0], renderer.MIRROR_MODES)
-        self._entry(view, "镜像轴 x (µm)", "mirror_x", 9.5)
+        mirror_entry = self._entry(view, "镜像轴 x (µm)", "mirror_x", 9.5)
+        mirror_entry.bind("<KeyRelease>", self._manual_mirror_coordinate, add="+")
+        mirror_entry.bind("<<Paste>>", lambda _event: self.after_idle(self._manual_mirror_coordinate), add="+")
         self._check(view, "显示结构与结线", "overlay", True)
         self._check(view, "显示结构标注（材料图）", "structure_labels", True)
         self._check(view, "显示坐标网格", "grid", False)
@@ -701,6 +713,9 @@ class TonyPlotApp(tk.Tk):
             menu.bind("<Configure>", lambda _event: self.after_idle(self._align_view_switcher), add="+")
         self.after_idle(self._align_view_switcher)
 
+    def _manual_mirror_coordinate(self, _event=None):
+        self.vars["mirror_mode"].set("手动坐标")
+
     def _switch_str_workspace(self, _event=None):
         page = self.notebook.select()
         if page == str(self.log_page):
@@ -709,10 +724,12 @@ class TonyPlotApp(tk.Tk):
         animated = page == str(self.animation_page)
         workspace = "animation" if animated else "str"
         if workspace != self._str_workspace:
+            self._str_directories[self._str_workspace] = self.directory_var.get()
             self._str_selected[self._str_workspace] = {
                 self.files[index] for index in self.file_list.curselection()
             }
             self._str_workspace = workspace
+            self.directory_var.set(self._str_directories[workspace])
             self.refresh_files()
             for index, path in enumerate(self.files):
                 if path in self._str_selected[workspace]:
@@ -1158,7 +1175,7 @@ class TonyPlotApp(tk.Tk):
             self.log_directory_var.set(folder)
             self.load_log_directory()
 
-    def _queue_file_read(self, kinds, folder=None, additions=None, on_complete=None, strict=False):
+    def _queue_file_read(self, kinds, folder=None, additions=None, on_complete=None, strict=False, *, append=False):
         """Read paths and headers off the UI thread; apply only the latest result."""
         tokens = {}
         for kind in kinds:
@@ -1168,6 +1185,7 @@ class TonyPlotApp(tk.Tk):
             if kind in ("log", self._str_workspace):
                 (self.log_status if kind == "log" else self.status).set("正在后台扫描文件和读取字段…")
         results = queue.Queue()
+        existing = {kind: set(self._str_files[kind]) for kind in kinds} if append else {}
 
         def worker():
             try:
@@ -1181,6 +1199,10 @@ class TonyPlotApp(tk.Tk):
                                     if path.suffix.casefold() == suffix and path.is_file())
                              if additions is None else additions[kind])
                     paths = list(dict.fromkeys(paths))
+                    if append:
+                        known = {path.resolve() for path in existing[kind]}
+                        paths = [path.resolve() for path in paths]
+                        paths = list(dict.fromkeys(path for path in paths if path not in known))
                     headers, invalid, binary = {}, [], []
                     for path in paths:
                         if tokens[kind] != self.file_load_ids[kind]:
@@ -1217,13 +1239,23 @@ class TonyPlotApp(tk.Tk):
                     continue
                 paths, headers, invalid, binary = batches[kind]
                 if kind != "log":
-                    self._str_files[kind] = paths
-                    self._str_headers[kind] = headers
+                    if append:
+                        self._str_files[kind].extend(paths)
+                        self._str_headers[kind].update(headers)
+                    else:
+                        self._str_files[kind] = paths
+                        self._str_headers[kind] = headers
                     if kind == self._str_workspace:
-                        self.refresh_files()
+                        if append:
+                            for path in paths:
+                                self.file_list.insert("end", path.name)
+                            self.refresh_fields()
+                            self.status.set(self.tr("已新增 {count} 个 STR 文件。").format(count=len(paths)))
+                        else:
+                            self.refresh_files()
                     if binary and kind == self._str_workspace:
                         self.status.set(self.tr("已加载 {loaded} 个 STR；{skipped} 个二进制 STR 需用 ATLAS 另存为 ASCII SSF。").format(
-                            loaded=len(paths), skipped=len(binary)))
+                            loaded=len(self._str_files[kind]), skipped=len(binary)))
                 else:
                     self.log_files = paths
                     self.log_headers = headers
@@ -1242,7 +1274,8 @@ class TonyPlotApp(tk.Tk):
         folder = self.log_directory_var.get().strip()
         if sync:
             self.directory_var.set(folder)
-        self._queue_file_read((self._str_workspace, "log") if sync else ("log",), folder=folder)
+            self._str_directories.update(str=folder, animation=folder)
+        self._queue_file_read(("str", "animation", "log") if sync else ("log",), folder=folder)
 
     def add_log_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas LOG", "*.log"), ("All files", "*.*")])
@@ -1384,8 +1417,26 @@ class TonyPlotApp(tk.Tk):
         folder = self.directory_var.get().strip()
         if sync:
             self.log_directory_var.set(folder)
-        workspace = self._str_workspace
-        self._queue_file_read((workspace, "log") if sync else (workspace,), folder=folder)
+        self._str_directories.update(str=folder, animation=folder)
+        self._queue_file_read(("str", "animation", "log") if sync else ("str", "animation"), folder=folder)
+
+    def _str_file_context_menu(self, event):
+        self.str_file_menu.entryconfigure(0, label=self.tr("刷新并加载新文件"))
+        try:
+            self.str_file_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.str_file_menu.grab_release()
+        return "break"
+
+    def refresh_str_directory(self):
+        folder = self.directory_var.get().strip()
+        if not folder and self.files:
+            folder = str(self.files[0].parent)
+        if not folder:
+            folder = filedialog.askdirectory(parent=self)
+        if folder:
+            self.directory_var.set(folder)
+            self._queue_file_read((self._str_workspace,), folder=folder, append=True)
 
     def add_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas STR", "*.str"), ("All files", "*.*")])

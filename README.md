@@ -8,7 +8,13 @@ Atlas ASCII `.str` 云图与 `.log` 曲线桌面软件。STR 页签基于 `plot_
 
 运行 `TonyPlotPy-Setup-0.4.2-x64.exe` 安装到当前用户，之后可从开始菜单启动或在 Windows 设置中卸载。安装包自带 Python 和绘图依赖。导出 MP4 需要将 FFmpeg 加入 `PATH`。
 
-重新构建时，请使用 64 位 Python，安装 `requirements.txt` 中的依赖、PyInstaller 和 Inno Setup 6，然后运行 `powershell -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1`。安装包生成在 `installer-output`。
+手动打包需要 Windows 64 位 Python（包含 `py` 启动器）和 Inno Setup 6。首次在项目目录运行以下命令安装绘图及打包依赖，并生成安装包。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1 -InstallDependencies
+```
+
+之后可双击 `src/packaging/build-installer.bat` 打包，窗口会显示结果并等待按键。也可使用上面的命令去掉 `-InstallDependencies`，复用已安装的依赖。脚本自动读取 `src/version.py` 中的版本，安装包生成在 `installer-output`。Inno Setup 安装在自定义位置时，可在命令末尾添加 `-IsccPath "安装位置\ISCC.exe"`。MP4 编码器 FFmpeg 由运行环境提供。
 
 ## 运行
 
