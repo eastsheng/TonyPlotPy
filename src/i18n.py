@@ -87,6 +87,7 @@ ENGLISH = {
     "材料颜色": "Material color", "显示图例底色与边框": "Show legend background and border",
     "正在后台扫描文件和读取字段…": "Scanning files and reading fields in the background…",
     "刷新并加载新文件": "Refresh and load new files",
+    "请拖入 STR 或 LOG 文件。": "Drop STR or LOG files into the window.",
     "已新增 {count} 个 STR 文件。": "Added {count} STR files.",
     "已加载 {loaded} 个 STR；{skipped} 个二进制 STR 需用 ATLAS 另存为 ASCII SSF。": "Loaded {loaded} STR files. Save the {skipped} binary STR files as ASCII SSF in ATLAS.",
     "无法读取的文件": "Unreadable files",

@@ -504,7 +504,7 @@ def show_player(root, parent, frames, arrow_button, select_frame, sync):
     counter = ttk.Label(controls)
     counter.pack(side="right")
     position = tk.IntVar(master=window)
-    applied_fps = 5.0
+    applied_fps = 10.0
     fps = tk.StringVar(master=window, value=f"{applied_fps:g}")
     interval = round(1000 / applied_fps)
     timer = None

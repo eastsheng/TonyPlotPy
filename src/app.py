@@ -33,6 +33,7 @@ from .tooltips import TooltipManager
 from .control_hints import hint_for
 from .version import APP_VERSION
 from .i18n import translate, LocalizedStringVar
+from .file_drop import enable_file_drop
 from .view_switcher import ViewSwitcher
 from .plot_config import save_config, load_config
 from .str_animation import render_frames, build_animation_panel, save_animation, colorbar_fields, colorbar_mode
@@ -111,6 +112,7 @@ class TonyPlotApp(tk.Tk):
         self.panel_labels = {}
         self.control_hints = []
         self._build_ui()
+        enable_file_drop(self, self._drop_files)
         self._refresh_language()
         self._refresh_widget_appearance()
         self.tooltips = TooltipManager(self)
@@ -690,8 +692,8 @@ class TonyPlotApp(tk.Tk):
         self._entry(colors, "轮廓线数", "guide_lines", 16)
 
         output = self._section(controls, "输出")
-        self._entry(output, "每列宽度 (英寸)", "panel_width", 3.2)
-        self._entry(output, "每行高度 (英寸)", "panel_height", 2.2)
+        self._entry(output, "每列宽度 (英寸)", "panel_width", 100 / 25.4)
+        self._entry(output, "每行高度 (英寸)", "panel_height", 80 / 25.4)
         self._entry(output, "导出 DPI", "dpi", self.preferences["dpi"])
         self.status = LocalizedStringVar(self, value="选择 .str 文件后生成预览")
         status_row = ttk.Frame(right)
@@ -1437,6 +1439,28 @@ class TonyPlotApp(tk.Tk):
         if folder:
             self.directory_var.set(folder)
             self._queue_file_read((self._str_workspace,), folder=folder, append=True)
+
+    def _drop_files(self, filenames):
+        paths = [Path(name) for name in filenames]
+        workspace = self._str_workspace
+        additions = {}
+        for kind, suffix, current in ((workspace, ".str", self.files), ("log", ".log", self.log_files)):
+            dropped = [path for path in paths if path.suffix.casefold() == suffix and path.is_file()]
+            if dropped:
+                additions[kind] = list(dict.fromkeys([*current, *dropped]))
+        if not additions:
+            messagebox.showinfo(self.tr("添加文件"), self.tr("请拖入 STR 或 LOG 文件。"), parent=self)
+            return
+        if workspace in additions:
+            self.directory_var.set(str(additions[workspace][-1].parent))
+            self._str_directories[workspace] = self.directory_var.get()
+        if "log" in additions:
+            self.log_directory_var.set(str(additions["log"][-1].parent))
+        if workspace in additions and self.notebook.select() == str(self.log_page):
+            self.notebook.select(self.animation_page if workspace == "animation" else self.str_page)
+        elif "log" in additions and workspace not in additions:
+            self.notebook.select(self.log_page)
+        self._queue_file_read(tuple(additions), additions=additions)
 
     def add_files(self):
         paths = filedialog.askopenfilenames(filetypes=[("Atlas STR", "*.str"), ("All files", "*.*")])
