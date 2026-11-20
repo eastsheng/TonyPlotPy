@@ -8,6 +8,7 @@ import copy
 import ctypes
 import queue
 import sys
+import webbrowser
 import threading
 import re
 from pathlib import Path
@@ -31,7 +32,7 @@ from .deferred_canvas import DeferredFigureCanvasTkAgg, CenteredNavigationToolba
 from .ui_settings import THEMES, WINDOW_SIZES, load_settings, save_settings
 from .tooltips import TooltipManager
 from .control_hints import hint_for
-from .version import APP_VERSION
+from .version import APP_VERSION, GITHUB_ACCOUNT, GITHUB_PROFILE
 from .i18n import translate, LocalizedStringVar
 from .file_drop import enable_file_drop
 from .view_switcher import ViewSwitcher
@@ -181,10 +182,10 @@ class TonyPlotApp(tk.Tk):
         self.notebook.tab(self.log_page, text=self.tr("  LOG 曲线  "))
         self.notebook.tab(self.animation_page, text=self.tr("动态云图"))
         self.view_switcher.set_labels((self.tr("STR 云图"), self.tr("动态云图"), self.tr("LOG 曲线")))
-        self.edit_menu.entryconfigure(0, label=self.tr("设置…"))
         for index, label in enumerate(("选择目录", "加载目录", "添加文件")):
             self.file_menu.entryconfigure(index, label=self.tr(label))
         self.file_menu.entryconfigure(4, label=self.tr("保存为图片…"))
+        self.file_menu.entryconfigure(6, label=self.tr("设置…"))
         for combo, display, internal, options in self.localized_combos:
             combo.configure(values=[self.tr(item) for item in options])
             display.set(self.tr(internal.get()))
@@ -371,6 +372,12 @@ class TonyPlotApp(tk.Tk):
         ttk.Label(body, text=self.tr("设置会在下次启动时自动恢复"), foreground=MUTED).pack(anchor="w", pady=(8, 2))
         ttk.Separator(body, orient="horizontal").pack(fill="x", pady=(12, 6))
         ttk.Label(body, text=self.tr(f"TonyPlotPy 版本 {APP_VERSION}"), foreground=MUTED).pack(anchor="w")
+        github = ttk.Label(body, text=f"GitHub · @{GITHUB_ACCOUNT}", foreground=ACCENT, cursor="hand2")
+        github.pack(anchor="w", pady=(4, 0))
+        github.bind("<Button-1>", lambda _event: webbrowser.open(GITHUB_PROFILE))
+        github.bind("<Return>", lambda _event: webbrowser.open(GITHUB_PROFILE))
+        github.configure(takefocus=True)
+        self.tooltips.register(github, GITHUB_PROFILE)
 
         def apply():
             try:
@@ -530,16 +537,13 @@ class TonyPlotApp(tk.Tk):
         navigation.pack_propagate(False)
         file_button = ttk.Menubutton(menu_bar, text="文件", style="TopMenu.TMenubutton")
         file_button.pack(side="left")
-        edit_button = ttk.Menubutton(menu_bar, text="编辑", style="TopMenu.TMenubutton")
-        edit_button.pack(side="left")
-        self.edit_menu = tk.Menu(edit_button, tearoff=False)
-        self.edit_menu.add_command(label="设置…", command=self.open_settings)
-        edit_button.configure(menu=self.edit_menu)
         self.file_menu = tk.Menu(file_button, tearoff=False)
         for label, action in (("选择目录", "choose"), ("加载目录", "load"), ("添加文件", "add")):
             self.file_menu.add_command(label=label, command=lambda action=action: self._file_menu_action(action))
         self.file_menu.add_separator()
         self.file_menu.add_command(label="保存为图片…", command=self.export)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="设置…", command=self.open_settings)
         file_button.configure(menu=self.file_menu)
         self.view_switcher = ViewSwitcher(navigation, lambda index: self.notebook.select(index))
         self.view_switcher.place(x=10, y=6)
