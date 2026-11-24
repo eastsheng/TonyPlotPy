@@ -22,7 +22,7 @@ py tonyplotpy.py
 Install 64-bit Python and Inno Setup 6. For the first build, run from the project directory:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1 -InstallDependencies
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/build-installer.ps1 -InstallDependencies
 ```
 
-For later builds, double-click `src/packaging/build-installer.bat`. Installers are written to `installer-output`.
+For later builds, double-click `installer/build-installer.bat`. Installers are written to the same directory.

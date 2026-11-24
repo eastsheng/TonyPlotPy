@@ -70,7 +70,7 @@ def panel_layout(options):
     """Return panel order and column count for both the renderer and settings UI."""
     count = len(options["files"])
     quantities = options["quantities"]
-    layout = options.get("layout", STACKED)
+    layout = options.get("layout", SIDE_BY_SIDE)
     if layout in (FILES_AS_ROWS, "时间 × 物理量"):
         return [(i, q) for i in range(count) for q in quantities], len(quantities)
     # Keep panels that use the same colorbar adjacent.
@@ -229,6 +229,8 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
         raise ValueError("图尺寸必须大于 0")
 
     figure = Figure(figsize=(width * columns, height * rows), layout=CloudLayoutEngine())
+    figure._tonyplot_structures = dict(zip(map(str, files), structures))
+    figure._tonyplot_rotated = rotated = options["orientation"].startswith("横向")
     figure._tonyplot_export_size = tuple(figure.get_size_inches())
     figure._tonyplot_str_view = str_view_ranges(bounds, options["orientation"])
     figure.patch.set_facecolor("white")
@@ -411,7 +413,7 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
         shrink = 0.78 / row_span if quantity == "shared_current" else 0.78
         colorbar = engine.add_colorbar(
             figure, group["image"], ax=group["axes"],
-            label=("Current density |J| (A/cm²)" if quantity == "shared_current"
+            label=(r"Current density $|J|$ (A/cm$^{2}$)" if quantity == "shared_current"
                    else quantity_label(quantity)), shrink=shrink, pad=0.025,
         )
         if quantity == "shared_current":

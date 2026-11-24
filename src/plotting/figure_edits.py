@@ -4,6 +4,7 @@ from __future__ import annotations
 from matplotlib.transforms import Bbox
 from matplotlib.layout_engine import ConstrainedLayoutEngine
 from matplotlib.mathtext import MathTextParser
+from .math_labels import math_label
 from .tick_intervals import interval_locator
 
 
@@ -57,10 +58,10 @@ def apply_colorbar_style(axis, values):
     axis.set_box_aspect(None)
     axis.set_aspect("auto")
     axis.set_axes_locator(ColorbarLocator(base, values.copy()))
-    label = " ".join(values["label"].splitlines())
+    label = math_label(" ".join(values["label"].splitlines()))
     if label in (r"Total current density $|J_{total}|$ (A/cm$^2$)",
                  r"Total current density $J_{total}|$ (A/cm$^2$)"):
-        label = "Total current density |J| (A/cm²)"
+        label = r"Total current density $|J_{\mathrm{total}}|$ (A/cm$^{2}$)"
     axis.set_ylabel(label, fontsize=values["label_size"], color=values["color"],
                     fontfamily=values["font_family"], parse_math=colorbar_label_uses_math(label))
     bar = axis._colorbar
@@ -152,7 +153,7 @@ def apply_edits(figure, edits: dict) -> None:
             continue
         if artist is not None:
             if not values.get("preserve_text"):
-                artist.set_text(values["text"])
+                artist.set_text(math_label(values["text"]))
             artist.set_fontsize(values["size"])
             if "color" in values:
                 artist.set_color(values["color"])

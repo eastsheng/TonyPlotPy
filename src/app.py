@@ -35,6 +35,7 @@ from .control_hints import hint_for
 from .version import APP_VERSION, GITHUB_ACCOUNT, GITHUB_PROFILE
 from .i18n import translate, LocalizedStringVar
 from .file_drop import enable_file_drop
+from .cutline import open_cutline
 from .view_switcher import ViewSwitcher
 from .plot_config import save_config, load_config
 from .str_animation import render_frames, build_animation_panel, save_animation, colorbar_fields, colorbar_mode
@@ -622,7 +623,7 @@ class TonyPlotApp(tk.Tk):
         view = self._section(controls, "视图与组合")
         self._check(view, "仅显示材料（不绘制云图）", "materials_only", False)
         self._combo(view, "方向", "orientation", "纵向（x 横轴）", ("纵向（x 横轴）", "横向（深度横轴）"))
-        self._combo(view, "排列", "layout", renderer.STACKED, renderer.PANEL_LAYOUTS)
+        self._combo(view, "排列", "layout", renderer.SIDE_BY_SIDE, renderer.PANEL_LAYOUTS)
         self.var("columns", 3)  # Saved grid width in legacy .set files.
         for q, label in (("electron", "电子电流密度（幅值）"),
                          ("hole", "空穴电流密度（幅值）"),
@@ -1084,7 +1085,7 @@ class TonyPlotApp(tk.Tk):
                 self.vars["animation_temperature_frame_ranges"].set("[]")
                 self.vars["animation_temperature_per_frame"].set(False)
                 self.vars["animation_colorbar_rules"].set("{}")
-                self.vars["layout"].set(renderer.STACKED)
+                self.vars["layout"].set(renderer.SIDE_BY_SIDE)
                 self.vars["mirror_mode"].set(renderer.MIRROR_MODES[0])
                 self.vars["columns"].set(3)
                 for key in ("x0", "x1", "y0", "y1"):
@@ -1993,6 +1994,9 @@ class TonyPlotApp(tk.Tk):
                     tool.configure(bg=SURFACE, activebackground="#edf4ff",
                                    relief="flat", bd=0, highlightthickness=0)
             toolbar.update(); toolbar.pack(side="top", fill="x")
+            if not is_log:
+                ttk.Button(toolbar, text=self.tr("自定义截线"),
+                           command=lambda: open_cutline(self, figure, canvas)).pack(side="left")
             canvas.get_tk_widget().pack(fill="both", expand=True)
             edits = (self.log_single_edits.setdefault(options["curve_code"], {})
                      if is_log and "curve_code" in options else self.figure_edits[kind])

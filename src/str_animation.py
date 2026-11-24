@@ -22,6 +22,7 @@ from .plotting.figure_edits import apply_edits
 from .plotting.temperature_segments import parse_frame_ranges, parse_segments, segment_norm
 from .deferred_canvas import DeferredFigureCanvasTkAgg
 from .figure_editor import FigureEditor
+from .cutline import open_cutline
 
 COLORBAR_MODES = {
     "manual": "全程统一或手动分段",
@@ -113,6 +114,8 @@ def refresh_frame_image(frame):
 
 
 def editable_frame(root, parent, frame, arrow_button, sync):
+    ttk.Button(parent, text=root.tr("自定义截线"),
+               command=lambda: open_cutline(root, frame.figure, canvas)).pack(anchor="w")
     canvas = DeferredFigureCanvasTkAgg(frame.figure, master=parent)
     editor = FigureEditor(root, frame.figure, canvas, frame.edits, root.status,
                           on_commit=lambda: sync(frame))
@@ -168,7 +171,7 @@ def render_frames(options, cache, *, export_dpi=None, edits_by_path=None, report
     active_range = next(frame_ranges, None)
     segment_size, manual_limits = segment_settings or (len(paths), {})
     temperature_norm = None
-    layout = options.get("layout", renderer.STACKED)
+    layout = options.get("layout", renderer.SIDE_BY_SIDE)
     if layout not in renderer.PANEL_LAYOUTS:
         layout = renderer.STACKED
     frame_paths = paths[:1] if request.get("preview") is not None else paths

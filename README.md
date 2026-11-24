@@ -22,7 +22,7 @@ py tonyplotpy.py
 安装 64 位 Python 和 Inno Setup 6。首次在项目目录运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File src/packaging/build-installer.ps1 -InstallDependencies
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/build-installer.ps1 -InstallDependencies
 ```
 
-之后双击 `src/packaging/build-installer.bat`，安装包输出到 `installer-output`。
+之后双击 `installer/build-installer.bat`，安装包输出到同一目录。

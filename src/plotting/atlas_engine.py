@@ -14,6 +14,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.ticker import SymmetricalLogLocator
 from .field_catalog import FIELDS as ADDITIONAL_FIELDS, DISPLAY_ORDER as ADDITIONAL_ORDER
 from .font_presets import COLORBAR_LABEL_SIZE, COLORBAR_TICK_SIZE, available_paper_fonts
+from .math_labels import math_label
 
 
 # Renderer defaults. The desktop interface supplies data paths and plot settings.
@@ -104,7 +105,7 @@ FIELD_UI_LABELS_BY_CODE = {
 
 FIELD_DISPLAY_ORDER = (115, 108, 524, 525, 211, 220, 224,
                        210, 221, 225, 215, 222, 226, 124)
-FIELD_LABELS_BY_CODE.update({code: f"{name} ({unit})" if unit else name
+FIELD_LABELS_BY_CODE.update({code: f"{name} ({math_label(unit)})" if unit else name
                              for code, (_chinese, name, unit) in ADDITIONAL_FIELDS.items()})
 FIELD_UI_LABELS_BY_CODE.update({code: chinese for code, (chinese, _name, _unit)
                                 in ADDITIONAL_FIELDS.items()})
@@ -113,7 +114,7 @@ FIELD_DISPLAY_ORDER = (115, *ADDITIONAL_ORDER, *FIELD_DISPLAY_ORDER[1:])
 LABELS = {
     "electron": r"Electron current density $|J_e|$ (A/cm$^2$)",
     "hole": r"Hole current density $|J_h|$ (A/cm$^2$)",
-    "total": "Total current density |J| (A/cm²)",
+    "total": r"Total current density $|J_{\mathrm{total}}|$ (A/cm$^{2}$)",
     "temperature": "Lattice temperature (K)",
 }
 
