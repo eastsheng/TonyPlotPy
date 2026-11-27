@@ -75,6 +75,10 @@ class TonyPlotApp(tk.Tk):
         self._apply_app_icon()
         self._setup_style()
         self._str_workspace = "str"
+        self._str_quantity_selection = {
+            "str": {"total", "temperature"},
+            "animation": {"electron", "hole", "temperature"},
+        }
         self._str_files: dict[str, list[Path]] = {"str": [], "animation": []}
         self._str_headers = {"str": {}, "animation": {}}
         self._str_selected = {"str": set(), "animation": set()}
@@ -106,7 +110,7 @@ class TonyPlotApp(tk.Tk):
         self.vars: dict[str, tk.Variable] = {}
         self.localized_combos = []
         self.quantity_vars = {
-            q: tk.BooleanVar(value=q in ("total", "temperature"))
+            q: tk.BooleanVar(value=q in self._str_quantity_selection["str"])
             for q in QUANTITIES
         }
         self.extra_field_codes: list[int | str] = []
@@ -731,11 +735,16 @@ class TonyPlotApp(tk.Tk):
         animated = page == str(self.animation_page)
         workspace = "animation" if animated else "str"
         if workspace != self._str_workspace:
+            self._str_quantity_selection[self._str_workspace] = {
+                quantity for quantity, variable in self.quantity_vars.items() if variable.get()
+            }
             self._str_directories[self._str_workspace] = self.directory_var.get()
             self._str_selected[self._str_workspace] = {
                 self.files[index] for index in self.file_list.curselection()
             }
             self._str_workspace = workspace
+            for quantity, variable in self.quantity_vars.items():
+                variable.set(quantity in self._str_quantity_selection[workspace])
             self.directory_var.set(self._str_directories[workspace])
             self.refresh_files()
             for index, path in enumerate(self.files):

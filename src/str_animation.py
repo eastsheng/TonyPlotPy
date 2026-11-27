@@ -248,7 +248,7 @@ def build_animation_panel(root, parent, launch):
     dimensions = ttk.Frame(form)
     dimensions.pack(fill="x")
     values = []
-    for column, (label, default) in enumerate((("宽度 (mm)", "100"), ("高度 (mm)", "160"))):
+    for column, (label, default) in enumerate((("宽度 (mm)", "300"), ("高度 (mm)", "160"))):
         ttk.Label(dimensions, text=label).grid(row=0, column=column, sticky="w", padx=4)
         value = tk.StringVar(master=parent, value=default)
         entry = ttk.Entry(dimensions, textvariable=value, width=12)
