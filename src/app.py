@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -488,6 +488,18 @@ class TonyPlotApp(tk.Tk):
         row.bind("<Configure>", arrange)
         arrange()
 
+    def _grid_color(self, parent, label, key, default):
+        variable = self.var(key, default)
+        def choose():
+            color = colorchooser.askcolor(color=variable.get(), title=self.tr(label), parent=self)[1]
+            if color:
+                variable.set(color)
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=2)
+        caption = ttk.Label(row, text=self.tr(label), style="Menu.TLabel")
+        button = ttk.Button(row, textvariable=variable, command=choose)
+        self._layout_parameter_row(row, caption, button)
+
     def _check(self, parent, label, key, default):
         checkbox = ttk.Checkbutton(parent, text=label, variable=self.var(key, default))
         checkbox.pack(anchor="w", pady=2)
@@ -663,7 +675,9 @@ class TonyPlotApp(tk.Tk):
         self._check(view, "显示结构与结线", "overlay", True)
         self._check(view, "显示结构标注（材料图）", "structure_labels", True)
         self._check(view, "显示坐标网格", "grid", False)
+        self._grid_color(view, "坐标网格颜色", "grid_color", "#64748b")
         self._check(view, "显示三角网格", "mesh", False)
+        self._grid_color(view, "三角网格颜色", "mesh_color", "#334155")
         self._check(view, "显示物理量标题", "show_quantity_title", False)
         ttk.Button(view, text="子图轴标签…", command=self.open_panel_labels).pack(anchor="w", pady=4)
         self._entry(view, "x 最小值（空=自动）", "x0", "")

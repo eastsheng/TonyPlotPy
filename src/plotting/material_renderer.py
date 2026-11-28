@@ -84,7 +84,7 @@ def make_material_figure(options, structures, labels):
                 record["artists"].append(axis.collections[before])
             used[name] = color
         if options.get("mesh", False):
-            engine.plot_mesh(axis, structure, rotated=rotated)
+            engine.plot_mesh(axis, structure, rotated=rotated, color=options.get("mesh_color", "#334155"))
         axis.set_xlim((y0, y1) if rotated else (x0, x1))
         axis.set_ylim((x0, x1) if rotated else (y1, y0))
         draw_structure_info(axis, structure, rotated=rotated, junctions=options["overlay"],
@@ -96,7 +96,9 @@ def make_material_figure(options, structures, labels):
         axis.yaxis.label.set_visible(visibility.get("y", True))
         axis.set_title(labels[file_index], fontsize=TITLE_SIZE, color="#183b56", pad=7)
         axis.tick_params(direction="in", labelsize=AXIS_TICK_SIZE, colors="black")
-        axis.grid(options.get("grid", False))
+        axis.grid(False)
+        if options.get("grid", False):
+            axis.grid(True, color=options.get("grid_color", "#64748b"))
         apply_material_legend(axis, {})
     for axis in list(axes.flat)[len(panels):]:
         axis.set_visible(False)

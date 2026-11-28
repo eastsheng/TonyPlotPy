@@ -384,7 +384,7 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
                 engine.plot_region(ax, structure, region_id, None, rotated=rotated)
         visibility = options.get("panel_labels", {}).get((str(files[file_index]), quantity), {})
         if options.get("mesh", False):
-            engine.plot_mesh(ax, structure, rotated=rotated)
+            engine.plot_mesh(ax, structure, rotated=rotated, color=options.get("mesh_color", "#334155"))
         if flows:
             draw_flow(ax, flows[file_index], pane_xlim, pane_ylim, options.get("flow_density", "标准"), arrow_length,
                       legend=pane_row == 0 and pane_col == pane_cols - 1)
@@ -397,7 +397,7 @@ def make_figure(options: dict, cache: dict, *, prepared=None, sequence_norms=Non
             ax.set_title(panel_title, fontsize=TITLE_SIZE, color="#183b56", pad=7)
         ax.tick_params(direction="in", labelsize=AXIS_TICK_SIZE, colors="black", width=0.7)
         if options.get("grid", False):
-            ax.grid(True, axis="both", color="#64748b", linewidth=0.5, alpha=0.45)
+            ax.grid(True, axis="both", color=options.get("grid_color", "#64748b"), linewidth=0.5, alpha=0.45)
         else:
             ax.grid(False)
         for spine in ax.spines.values():

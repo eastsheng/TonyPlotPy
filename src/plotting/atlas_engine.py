@@ -370,10 +370,10 @@ def plot_region(ax, structure: Structure, region_id: int, color: str | None,
     ax.add_collection(LineCollection(xy[outline], colors="#303030", linewidths=0.65, zorder=3))
 
 
-def plot_mesh(ax, structure: Structure, rotated=False):
+def plot_mesh(ax, structure: Structure, rotated=False, color="#334155"):
     edges = mesh_edges(structure.triangles, structure.x.size)
     xy = np.column_stack((structure.y, structure.x)) if rotated else np.column_stack((structure.x, structure.y))
-    ax.add_collection(LineCollection(xy[edges], colors="#334155", linewidths=0.25,
+    ax.add_collection(LineCollection(xy[edges], colors=color, linewidths=0.25,
                                      alpha=0.55, zorder=4, rasterized=True))
 
 

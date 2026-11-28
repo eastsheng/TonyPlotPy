@@ -88,6 +88,7 @@ ENGLISH = {
     "正在后台扫描文件和读取字段…": "Scanning files and reading fields in the background…",
     "刷新并加载新文件": "Refresh and load new files",
     "自定义截线": "Custom cutline", "采样点数": "Samples",
+    "坐标网格颜色": "Coordinate grid color", "三角网格颜色": "Mesh color",
     "物理量（Ctrl / Shift 多选）": "Fields (Ctrl / Shift to select multiple)",
     "请选择至少一个物理量。": "Select at least one field.",
     "同图共用 Y 轴": "Shared Y axis", "同图双 Y 轴": "Dual Y axes",
